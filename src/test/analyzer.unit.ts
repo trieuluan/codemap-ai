@@ -180,3 +180,43 @@ test('config and file warnings remain deduplicated across repeated incremental s
     assert.equal(cache.configWarnings.length, 1);
   });
 });
+test('import symbols retain aliases/types and follow barrel declarations without guessing namespace or ambiguous exports', async () => {
+  await fixture({
+    'Dashboard.tsx': `import Stats, { Card as DashboardCard, type Props, Controller } from './components';\nimport * as UI from './components';\nconst { Card: RequiredCard } = require('./components');\nimport { conflict } from './ambiguous';`,
+    'components/index.ts': `export { default } from './Stats'; export { Card, type Props } from './card'; export { Controller } from './controller';`,
+    'components/Stats.tsx': 'export default function Stats() { return null; }',
+    'components/card.tsx': 'export const Card = () => null;\nexport interface Props { label: string }',
+    'components/controller.ts': 'class Controller {}\nexport { Controller };',
+    'ambiguous.ts': `export * from './left'; export * from './right';`,
+    'left.ts': 'export const conflict = 1;', 'right.ts': 'export const conflict = 2;',
+  }, async (root, files) => {
+    const graph = await analyze(options(root, files));
+    const edge = graph.edges.find(edge => edge.source.endsWith('/Dashboard.tsx') && edge.target.endsWith('/components/index.ts'))!;
+    const symbols = edge.sites[0].symbols!;
+    assert.deepEqual(symbols.map(symbol => [symbol.imported, symbol.local, symbol.typeOnly, symbol.kind]), [
+      ['default', 'Stats', false, 'function'], ['Card', 'DashboardCard', false, 'function'],
+      ['Props', 'Props', true, 'interface'], ['Controller', 'Controller', false, 'class'],
+    ]);
+    for (const symbol of symbols) {
+      const node = graph.nodes.find(node => node.id === symbol.declaration?.nodeId)!;
+      assert.ok(node); assert.ok(node.declarations?.some(item => item.id === symbol.declaration?.symbolId));
+    }
+    assert.equal(symbols[1].line, 0); assert.ok(symbols[1].character > 0);
+    assert.equal(edge.sites[1].symbols![0].form, 'namespace'); assert.equal(edge.sites[1].symbols![0].declaration, undefined);
+    assert.equal(edge.sites[2].symbols![0].local, 'RequiredCard'); assert.equal(edge.sites[2].symbols![0].kind, 'function');
+    assert.equal(graph.edges.find(edge => edge.target.endsWith('/ambiguous.ts'))!.sites[0].symbols![0].declaration, undefined);
+  });
+});
+test('incremental symbol linking updates untouched importers after a declaration changes or disappears', async () => {
+  await fixture({ 'a.ts': `import { Item } from './b';`, 'b.ts': 'export class Item {}' }, async (root, files) => {
+    const cache = new AnalyzerCache();
+    const first = await analyze({ ...options(root, files), cache });
+    assert.equal(first.edges[0].sites[0].symbols![0].kind, 'class');
+    const modified = files.map(file => file.fileName.endsWith('/b.ts') ? { ...file, text: 'export function Item() {}' } : file);
+    const changed = await analyze({ ...options(root, modified), cache });
+    assert.equal(changed.edges[0].sites[0].symbols![0].kind, 'function');
+    assert.equal(first.edges[0].sites[0].symbols![0].kind, 'class');
+    const removed = await analyze({ ...options(root, modified.map(file => file.fileName.endsWith('/b.ts') ? { ...file, text: 'export {};' } : file)), cache });
+    assert.equal(removed.edges[0].sites[0].symbols![0].declaration, undefined);
+  });
+});

@@ -69,6 +69,31 @@ suite('CodeMap extension integration', () => {
       assert.equal(vscode.window.activeTextEditor?.selection.start.character, site.character);
     } finally { panel.dispose(); }
   });
+  test('opens a symbol declaration through a barrel and rejects unknown symbol IDs', async () => {
+    const root = vscode.workspace.workspaceFolders![0];
+    const contents = { 'symbol-source.ts': 'export class Widget {}', 'symbol-barrel.ts': 'export { Widget as Item } from "./symbol-source";', 'symbol-consumer.ts': 'import { Item as Card } from "./symbol-barrel";' };
+    const extension = vscode.extensions.all.find(item => item.packageJSON.name === 'codemap-ai')!;
+    let panel: CodeMapPanel | undefined;
+    try {
+      for (const [name, text] of Object.entries(contents)) { await vscode.workspace.fs.writeFile(vscode.Uri.joinPath(root.uri, name), Buffer.from(text)); }
+      panel = new CodeMapPanel(extension.extensionUri, () => {});
+      await panel.handleMessage({ type: 'ready' });
+      const graph = await scan();
+      const edge = graph.edges.find(edge => edge.source.endsWith('/symbol-consumer.ts'))!;
+      const site = edge.sites[0]; const symbol = site.symbols![0];
+      const declaration = graph.nodes.find(node => node.id === symbol.declaration?.nodeId)!;
+      const location = declaration.declarations!.find(item => item.id === symbol.declaration!.symbolId)!;
+      await panel.handleMessage({ type: 'openDeclaration', nodeId: edge.source, siteId: site.id, symbolId: symbol.id });
+      assert.equal(vscode.window.activeTextEditor?.document.uri.toString(), declaration.id);
+      assert.equal(vscode.window.activeTextEditor?.selection.start.line, location.line);
+      assert.equal(vscode.window.activeTextEditor?.selection.start.character, location.character);
+      await panel.handleMessage({ type: 'openDeclaration', nodeId: edge.source, siteId: site.id, symbolId: 'unknown' });
+      assert.equal(vscode.window.activeTextEditor?.document.uri.toString(), declaration.id);
+    } finally {
+      panel?.dispose();
+      for (const name of Object.keys(contents)) { await vscode.workspace.fs.delete(vscode.Uri.joinPath(root.uri, name)); }
+    }
+  });
 });
 
 suite('CodeMap live controller', function () {
@@ -92,12 +117,15 @@ suite('CodeMap live controller', function () {
     const listener = vscode.workspace.onDidCloseTextDocument(doc => { if (doc.uri.toString() === uri.toString()) { closed = true; } });
     try {
       await controller.refresh();
+      // Files deleted by the previous integration can arrive in the new broad
+      // watcher after construction. Let those legitimate structural updates settle.
+      await new Promise(resolve => setTimeout(resolve, 1000));
       const scans = logs.filter(message => message.startsWith('Analyze ')).length;
       // Changing language emits a real close/open lifecycle without editing source.
       await vscode.languages.setTextDocumentLanguage(document, 'plaintext');
       assert.ok(closed);
       await new Promise(resolve => setTimeout(resolve, 1800));
-      assert.equal(logs.filter(message => message.startsWith('Analyze ')).length, scans);
+      assert.equal(logs.filter(message => message.startsWith('Analyze ')).length, scans, logs.join('\n'));
     } finally {
       controller.dispose(); listener.dispose();
       await vscode.languages.setTextDocumentLanguage(await vscode.workspace.openTextDocument(uri), language);

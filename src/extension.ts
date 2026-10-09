@@ -89,19 +89,29 @@ export class CodeMapPanel implements vscode.Disposable {
           break;
         case 'openFolder': await vscode.commands.executeCommand('vscode.openFolder'); break;
         case 'openFile':
+        case 'openDeclaration':
         case 'openImport': {
           if (!('nodeId' in message) || typeof message.nodeId !== 'string') { return; }
           const node = this.snapshot?.nodes.find(item => item.id === message.nodeId);
           if (!node) { return; }
           let site: ImportSite | undefined;
-          if (message.type === 'openImport') {
+          if (message.type === 'openImport' || message.type === 'openDeclaration') {
             if (!('siteId' in message) || typeof message.siteId !== 'string') { return; }
             site = this.snapshot?.edges.filter(edge => edge.source === node.id).flatMap(edge => edge.sites)
               .concat(node.outside.map(item => item.site)).find(item => item.id === message.siteId);
             if (!site) { return; }
           }
-          const document = await vscode.workspace.openTextDocument(vscode.Uri.parse(node.id));
-          const position = site ? document.validatePosition(new vscode.Position(site.line, site.character)) : undefined;
+          let target = node; let location: { line: number; character: number } | undefined = site;
+          if (message.type === 'openDeclaration') {
+            if (!('symbolId' in message) || typeof message.symbolId !== 'string') { return; }
+            const declaration = site?.symbols?.find(symbol => symbol.id === message.symbolId)?.declaration;
+            const declarationNode = this.snapshot?.nodes.find(item => item.id === declaration?.nodeId);
+            const symbol = declarationNode?.declarations?.find(item => item.id === declaration?.symbolId);
+            if (!declarationNode || !symbol) { return; }
+            target = declarationNode; location = symbol;
+          }
+          const document = await vscode.workspace.openTextDocument(vscode.Uri.parse(target.id));
+          const position = location ? document.validatePosition(new vscode.Position(location.line, location.character)) : undefined;
           await vscode.window.showTextDocument(document, { viewColumn: vscode.ViewColumn.Beside,
             selection: position ? new vscode.Range(position, position) : undefined, preview: true });
           break;

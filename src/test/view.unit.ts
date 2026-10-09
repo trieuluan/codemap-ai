@@ -82,7 +82,7 @@ test('mode and folder depth keep independent positions and viewports, including 
 test('legacy shared layouts migrate without leaking file coordinates into folders', () => {
   const legacy = { ...defaultView(), version: 1, mode: 'folders', positions: { '1': { x: 9000, y: 0 }, 'folder:2:src/services': { x: 20, y: 30 } }, viewport: { x: 100, y: 200, zoom: 0.5 } };
   const migrated = readView(legacy);
-  assert.equal(migrated.version, 2); assert.deepEqual(migrated.positions, {}); assert.equal(migrated.viewport, undefined);
+  assert.equal(migrated.version, 3); assert.deepEqual(migrated.positions, {}); assert.equal(migrated.viewport, undefined);
   assert.deepEqual(switchLayout(migrated, 'files').positions, { '1': { x: 9000, y: 0 } });
   assert.deepEqual(readView({ ...legacy, mode: 'files' }).viewport, legacy.viewport);
 });
@@ -96,4 +96,26 @@ test('reconciliation removes deleted nodes from all layout profiles and validate
   assert.deepEqual(restored.layouts.files.positions, { '1': { x: 10, y: 20 } });
   assert.deepEqual(restored.layouts['folders:2'].positions, { 'folder:2:src/services': { x: 50, y: 60 } });
   assert.equal(restored.layouts['folders:2'].viewport, undefined); assert.equal(restored.layouts.invalid, undefined);
+});
+test('folder context and Peek expose only imported members, preserving directed file relationships', () => {
+  const state = { ...defaultView(), mode: 'folders' as const, selected: '0' };
+  const collapsed = projectGraph(graph, state, { fileId: '0', groups: [] });
+  const folder = collapsed.nodes.find(node => node.id === 'folder:2:src/services')!;
+  assert.deepEqual(folder.related?.map(item => item.fileId), ['1']);
+  const peeked = projectGraph(graph, state, { fileId: '0', groups: [folder.id] });
+  assert.ok(peeked.nodes.some(node => node.id === '1' && node.kind === 'file'));
+  assert.deepEqual(peeked.nodes.find(node => node.id === folder.id)?.members, ['2']);
+  assert.ok(peeked.edges.some(edge => edge.source === '0' && edge.target === '1'));
+  assert.ok(peeked.edges.some(edge => edge.source === '1' && edge.target === folder.id));
+  assert.ok(peeked.edges.some(edge => edge.source === folder.id && edge.target === '1'));
+  assert.equal(peeked.edges.flatMap(edge => edge.fileEdges ?? []).length, graph.edges.length);
+  assert.equal(peeked.visibleFiles, graph.nodes.length);
+  assert.deepEqual(state.expanded, []);
+  assert.deepEqual(projectGraph(graph, state, { fileId: '0', groups: [] }).nodes.map(node => node.id), collapsed.nodes.map(node => node.id));
+});
+test('larger folder cards migrate old folder layouts once without losing Files coordinates', () => {
+  const files = { positions: { '1': { x: 100, y: 20 } }, viewport: { x: 1, y: 2, zoom: 0.5 } };
+  const migrated = readView({ ...defaultView(), version: 2, mode: 'folders', positions: { '1': { x: 5, y: 6 } }, layouts: { files, 'folders:2': files } });
+  assert.deepEqual(migrated.positions, {}); assert.equal(migrated.layouts['folders:2'], undefined);
+  assert.deepEqual(switchLayout(migrated, 'files').positions, files.positions);
 });

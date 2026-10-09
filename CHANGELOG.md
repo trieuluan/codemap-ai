@@ -1,5 +1,12 @@
 # Change Log
 
+## Unreleased
+
+- Preview imported files and symbols inside collapsed folders for the selected file.
+- Inspect directed file relationships, aliases and type-only imports by clicking edges.
+- Peek only directly imported members while keeping other folder files grouped.
+- Link static symbols to declarations through barrel exports; show declaration kinds and file symbol lists.
+
 ## 0.2.0
 
 - Add file/folder views, folder depth, expand/collapse, directed aggregate edges, filters and 1–2 hop Focus.

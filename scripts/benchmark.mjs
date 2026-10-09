@@ -26,7 +26,7 @@ function collect(root) {
 function layout(graph) {
   const started = performance.now(); const model = new dagre.graphlib.Graph();
   model.setGraph({rankdir:'LR', nodesep:28, ranksep:90}); model.setDefaultEdgeLabel(()=>({}));
-  graph.nodes.forEach(node => model.setNode(node.id,{width:220,height:70}));
+  graph.nodes.forEach(node => model.setNode(node.id,{width:300,height:node.kind==='folder'?240:70}));
   graph.edges.forEach(edge => model.setEdge(edge.source,edge.target)); dagre.layout(model);
   return performance.now()-started;
 }

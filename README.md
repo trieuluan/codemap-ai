@@ -34,6 +34,16 @@ Open this folder in VS Code and press **F5** (or **Fn + F5** on macOS). In the E
 
 Folder edges aggregate directed file-to-file relations; labels count those relations, not individual import statements. Dependencies inside a collapsed folder appear as an internal count. File details always use the complete source graph. Footer counts show **visible files / total files**.
 
+### Inspect imports without expanding a folder
+
+Select a file such as `Dashboard.tsx`. Collapsed folders preview the files it imports and their imported symbol names, while the rest stay grouped. The preview shows up to two files; **View imports** opens all matching relationships in the sidebar. Click any arrow to inspect its directed file relationships, source import lines and symbol bindings. Edge labels distinguish file relationships from symbol bindings.
+
+Bindings show default/named/namespace imports, aliases (`Card → DashboardCard`), type-only imports and a declaration kind when known (`function`, `class`, `interface`, `type`, `enum`, `value`). **Declaration ↗** opens a validated declaration in the current snapshot, including statically resolvable barrel re-exports. The original import line remains separately navigable. File details also have an expandable **Declared symbols** list.
+
+**Peek N files** puts only the directly imported members onto the canvas; the remaining members stay in their folder. **Close Peek** regroups them; **Expand Folder** still opens all members. Peek is temporary and follows the import context of the selected file. Explicit Peek/Close Peek rearranges the visible graph; background source updates preserve positions. Folder layouts from earlier versions are laid out once to accommodate the larger summary cards; Files layouts are retained.
+
+Symbol linking uses static declarations and exports over TypeScript-resolved graph edges. Unknown/computed CommonJS exports, namespace members, external declarations and ambiguous barrel exports remain unclassified and have no declaration shortcut. An import is not proof that a function is called or a binding is used. Imported-symbol counts count bindings across import sites, not unique functions or runtime calls.
+
 ### Live updates
 
 **Auto Update is on by default.** After 750 ms without new changes, CodeMap updates from unsaved editor text or filesystem changes. Ordinary edits parse/resolve the changed file only. Adding/deleting/renaming files re-resolves all imports with cached parsing, so missing targets can become valid edges. Config/package changes invalidate resolver state. Known inherited configs outside the root are watched too.

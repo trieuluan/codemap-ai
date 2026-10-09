@@ -1,6 +1,6 @@
 import type { DisplayGraph, FileNode, GraphLayoutState, GraphSnapshot, GraphViewState } from './model';
 export function defaultView(): GraphViewState {
-  return { version: 2, mode: 'files', depth: 2, expanded: [], positions: {}, layouts: {}, folder: '', hideTests: false,
+  return { version: 3, mode: 'files', depth: 2, expanded: [], positions: {}, layouts: {}, folder: '', hideTests: false,
     hideIsolated: false, focus: 0, autoUpdate: true };
 }
 const finite = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value);
@@ -25,12 +25,12 @@ function readLayout(value: unknown): GraphLayoutState {
 export function readView(value: unknown): GraphViewState {
   if (!value || typeof value !== 'object') { return defaultView(); }
   const state = value as Omit<GraphViewState, 'version'> & { version: number };
-  if (![1, 2].includes(state.version) || !['files', 'folders'].includes(state.mode) || !Number.isInteger(state.depth) || state.depth < 1 ||
+  if (![1, 2, 3].includes(state.version) || !['files', 'folders'].includes(state.mode) || !Number.isInteger(state.depth) || state.depth < 1 ||
     ![0, 1, 2].includes(state.focus) || typeof state.folder !== 'string' || typeof state.autoUpdate !== 'boolean' ||
     typeof state.hideTests !== 'boolean' || typeof state.hideIsolated !== 'boolean' || !Array.isArray(state.expanded) ||
     !state.expanded.every(id => typeof id === 'string') || !state.positions || typeof state.positions !== 'object') { return defaultView(); }
   const layouts: GraphViewState['layouts'] = {};
-  if (state.version === 2 && state.layouts && typeof state.layouts === 'object') {
+  if (state.version >= 2 && state.layouts && typeof state.layouts === 'object') {
     for (const [key, value] of Object.entries(state.layouts)) {
       if (/^(files|folders:[1-9]\d*)$/.test(key)) { layouts[key] = readLayout(value); }
     }
@@ -44,7 +44,12 @@ export function readView(value: unknown): GraphViewState {
     layouts.files = files;
     active = state.mode === 'files' ? files : { positions: {}, viewport: undefined };
   }
-  return { ...defaultView(), ...state, version: 2, layouts,
+  if (state.version < 3) {
+    // Taller folder cards need one fresh layout; preserve the user's Files layout.
+    for (const key of Object.keys(layouts)) { if (key !== 'files') { delete layouts[key]; } }
+    if (state.mode === 'folders') { active = { positions: {}, viewport: undefined }; }
+  }
+  return { ...defaultView(), ...state, version: 3, layouts,
     selected: typeof state.selected === 'string' ? state.selected : undefined, ...active };
 }
 export const isTest = (path: string) => /(^|\/)(test|tests|__tests__)(\/|$)|\.(test|spec)\./i.test(path);
@@ -68,7 +73,8 @@ export function reconcileView(state: GraphViewState, graph: GraphSnapshot): Grap
     layouts: Object.fromEntries(Object.entries(state.layouts).map(([key, value]) => [key, prune(value)])) };
   return switchLayout(reconciled, state.mode, Math.min(state.depth, maxDepth));
 }
-export function projectGraph(graph: GraphSnapshot, state: GraphViewState): DisplayGraph {
+export interface PeekState { fileId?: string; groups: string[] }
+export function projectGraph(graph: GraphSnapshot, state: GraphViewState, peek: PeekState = { groups: [] }): DisplayGraph {
   const connected = new Set(graph.edges.flatMap(edge => [edge.source, edge.target]));
   let files = graph.nodes.filter(file => (!state.folder || file.path.startsWith(state.folder + '/')) &&
     (!state.hideTests || !isTest(file.path)) && (!state.hideIsolated || connected.has(file.id)));
@@ -93,9 +99,10 @@ export function projectGraph(graph: GraphSnapshot, state: GraphViewState): Displ
   }
   const nodeMap = new Map<string, DisplayGraph['nodes'][number]>();
   const representative = new Map<string, string>();
+  const related = new Map(graph.edges.filter(edge => edge.source === peek.fileId).map(edge => [edge.target, edge.sites]));
   for (const file of files) {
     const group = state.mode === 'folders' ? groupId(file, state.depth) : undefined;
-    const collapsed = group && !state.expanded.includes(group);
+    const collapsed = group && !state.expanded.includes(group) && !(peek.groups.includes(group) && related.has(file.id));
     const id = collapsed ? group : file.id;
     const groupPath = collapsed ? group.split(':').slice(2).join(':') : file.path;
     const node = nodeMap.get(id) ?? { id, kind: collapsed ? 'folder' : 'file', label: collapsed ? groupPath : file.name,
@@ -104,6 +111,9 @@ export function projectGraph(graph: GraphSnapshot, state: GraphViewState): Displ
     nodeMap.set(id, node);
     representative.set(file.id, id);
   }
+  for (const node of nodeMap.values()) {
+    if (node.kind === 'folder') { node.related = node.members.filter(id => related.has(id)).map(fileId => ({ fileId, sites: related.get(fileId)! })); }
+  }
   const edges = new Map<string, DisplayGraph['edges'][number]>();
   for (const edge of graph.edges) {
     const source = representative.get(edge.source);
@@ -111,8 +121,10 @@ export function projectGraph(graph: GraphSnapshot, state: GraphViewState): Displ
     if (!source || !target) { continue; }
     if (source === target && nodeMap.get(source)?.kind === 'folder') { nodeMap.get(source)!.internalEdges++; continue; }
     const id = JSON.stringify([source, target]);
-    const entry = edges.get(id) ?? { id, source, target, count: 0 };
+    const entry = edges.get(id) ?? { id, source, target, count: 0, fileEdges: [], symbolCount: 0 };
     entry.count++;
+    entry.fileEdges!.push(edge.id);
+    entry.symbolCount! += edge.sites.reduce((count, site) => count + (site.symbols?.length ?? 0), 0);
     edges.set(id, entry);
   }
   return { nodes: [...nodeMap.values()], edges: [...edges.values()], visibleFiles: files.length };

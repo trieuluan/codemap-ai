@@ -42,3 +42,15 @@ select { font: inherit; background: var(--vscode-dropdown-background, var(--vsco
 .sync.error { color: var(--vscode-errorForeground); background: transparent; display: inline; padding: 0; }
 .react-flow__edge-text { fill: var(--vscode-foreground); }
 .react-flow__edge-textbg { fill: var(--vscode-editor-background); }
+.folder-context { border-top: 1px solid var(--vscode-panel-border); margin-top: 10px; padding-top: 5px; }
+.folder-context > small { margin-bottom: 8px; }
+.folder-import { margin: 7px 0; font-size: 11px; }
+.folder-import > span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.folder-import small { margin-top: 2px; }
+.node-actions { display: flex; gap: 6px; margin-top: 8px; }
+.node-actions button { font-size: 10px; padding: 4px 6px; }
+.symbol-row { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; font-size: 11px; margin: 6px 0; overflow-wrap: anywhere; }
+.symbol-row .link { font-size: 10px; padding: 0; }
+.context-bar { display: flex; flex-wrap: wrap; gap: 8px; padding: 7px 16px; border-bottom: 1px solid var(--vscode-panel-border); font-size: 11px; }
+.context-bar span { color: var(--vscode-descriptionForeground); }
+details { margin-top: 14px; } summary { cursor: pointer; }

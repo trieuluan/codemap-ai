@@ -2,6 +2,7 @@ import * as path from 'node:path';
 import * as ts from 'typescript';
 import { isBuiltin } from 'node:module';
 import { createHash } from 'node:crypto';
+import { collectDeclarations, importSymbols, linkSymbols } from './symbols';
 import type { FileNode, GraphSnapshot, GraphWarning, ImportSite, RelationKind } from '../shared/model';
 
 export interface SourceInput { id: string; fileName: string; text: string }
@@ -60,7 +61,7 @@ export function collectImports(file: ts.SourceFile): { sites: ImportSite[]; warn
       const id = `${node.getStart(file)}:${kind}`;
       usages.set(id, value);
       sites.push({ id, specifier: value.text, kind,
-        line: position.line, character: position.character });
+        line: position.line, character: position.character, symbols: importSymbols(node, file) });
     } else {
       const line = file.getLineAndCharacterOfPosition(node.getStart(file)).line + 1;
       warnings.push(`Cannot resolve non-literal ${kind} at line ${line}.`);
@@ -189,6 +190,7 @@ export async function analyze(options: AnalyzeOptions): Promise<GraphSnapshot> {
       if (!reuse) { parsedCount++; }
       resolvedCount++;
       const imports = reuse ? cached.imports : collectImports(source);
+      Object.assign(node, collectDeclarations(source));
       ownWarnings.push(...imports.warnings.map(message => ({ fileId: node.id, message })));
       const parsedDiagnostics = (source as ts.SourceFile & { parseDiagnostics?: readonly ts.Diagnostic[] }).parseDiagnostics ?? [];
       ownWarnings.push(...parsedDiagnostics.map(diagnostic => ({ fileId: node.id,
@@ -222,12 +224,13 @@ export async function analyze(options: AnalyzeOptions): Promise<GraphSnapshot> {
     options.progress?.(index + 1, options.files.length);
   }
   if (options.cancelled?.()) { throw new ScanCancelled(); }
+  const edges = linkSymbols(nodes, [...edgeMap.values()]);
   cache.entries = nextEntries;
   cache.metadata = metadata;
   cache.metadataHashes = metadataHashes;
   cache.configWarnings = [...new Map(configWarnings.map(warning => [JSON.stringify(warning), warning])).values()];
   cache.rootId = options.rootId;
   options.stats?.({ milliseconds: performance.now() - started, parsed: parsedCount, resolved: resolvedCount, files: nodes.length });
-  return { revision: options.revision ?? 1, root: { id: options.rootId, name: options.rootName }, nodes, edges: [...edgeMap.values()],
+  return { revision: options.revision ?? 1, root: { id: options.rootId, name: options.rootName }, nodes, edges,
     scannedAt: new Date().toISOString(), warnings: [...new Map(warnings.map(warning => [JSON.stringify(warning), warning])).values()] };
 }

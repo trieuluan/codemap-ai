@@ -1,10 +1,19 @@
 export type RelationKind = 'import' | 'type-import' | 're-export' | 'require' | 'dynamic-import';
+export type SymbolKind = 'function' | 'class' | 'type' | 'interface' | 'enum' | 'value';
+export interface SourceSymbol { id: string; name: string; kind: SymbolKind; line: number; character: number }
+export interface ImportedSymbol {
+  id: string; imported: string; local: string; form: 'named' | 'default' | 'namespace' | 'require'; typeOnly: boolean;
+  line: number; character: number; kind?: SymbolKind;
+  declaration?: { nodeId: string; symbolId: string };
+}
+export interface ExportBinding { name: string; local?: string; siteId?: string; imported?: string }
 export interface ImportSite {
   id: string;
   specifier: string;
   kind: RelationKind;
   line: number;
   character: number;
+  symbols?: ImportedSymbol[];
 }
 export interface OutsideDependency {
   site: ImportSite;
@@ -17,6 +26,8 @@ export interface FileNode {
   name: string;
   language: string;
   outside: OutsideDependency[];
+  declarations?: SourceSymbol[];
+  exports?: ExportBinding[];
 }
 export interface DependencyEdge {
   id: string;
@@ -39,6 +50,7 @@ export type UiMessage =
   | { type: 'autoUpdate'; enabled: boolean }
   | { type: 'layoutStats'; milliseconds: number; nodes: number }
   | { type: 'openFile'; nodeId: string }
+  | { type: 'openDeclaration'; nodeId: string; siteId: string; symbolId: string }
   | { type: 'openImport'; nodeId: string; siteId: string };
 export type HostMessage =
   | { type: 'snapshot'; snapshot: GraphSnapshot; viewState?: GraphViewState }
@@ -54,7 +66,7 @@ export interface GraphLayoutState {
   viewport?: { x: number; y: number; zoom: number };
 }
 export interface GraphViewState {
-  version: 2;
+  version: 3;
   mode: 'files' | 'folders';
   depth: number;
   expanded: string[];
@@ -75,6 +87,7 @@ export interface DisplayNode {
   path: string;
   members: string[];
   internalEdges: number;
+  related?: { fileId: string; sites: ImportSite[] }[];
 }
-export interface DisplayEdge { id: string; source: string; target: string; count: number }
+export interface DisplayEdge { id: string; source: string; target: string; count: number; fileEdges?: string[]; symbolCount?: number }
 export interface DisplayGraph { nodes: DisplayNode[]; edges: DisplayEdge[]; visibleFiles: number }
