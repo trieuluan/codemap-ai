@@ -7,6 +7,8 @@ import os from 'node:os';
 const require = createRequire(import.meta.url);
 const { analyze, AnalyzerCache } = require('../out/analyzer/analyzer.js');
 const { projectGraph, defaultView } = require('../out/shared/view.js');
+const { NavigationHistory, reconcileLocation } = require('../out/shared/navigation.js');
+const { readLibrary } = require('../out/shared/library.js');
 const dagre = require('@dagrejs/dagre');
 const ignored = new Set([
   '.git',
@@ -82,7 +84,37 @@ async function measure(label, root) {
   const fileLayout = layout(projectGraph(graph, defaultView()));
   const folders = projectGraph(graph, { ...defaultView(), mode: 'folders', depth: 2 });
   const folderLayout = layout(folders);
+  const location = {
+    view: {
+      ...defaultView(),
+      positions: Object.fromEntries(graph.nodes.map((node, i) => [node.id, { x: i * 390, y: 0 }])),
+    },
+    peek: [],
+    positions: {},
+    viewport: { x: 0, y: 0, zoom: 0.5 },
+  };
+  const history = new NavigationHistory();
+  let started = performance.now();
+  for (let i = 0; i < 50; i++)
+    history.visit({
+      ...location,
+      view: { ...location.view, selected: graph.nodes[i % graph.nodes.length]?.id },
+    });
+  const historyMs = performance.now() - started;
+  started = performance.now();
+  reconcileLocation(location, graph);
+  const restoreMs = performance.now() - started;
+  started = performance.now();
+  readLibrary({
+    version: 1,
+    views: Array.from({ length: 50 }, (_, i) => ({ id: String(i), name: `View ${i}`, location })),
+    annotations: [],
+  });
+  const libraryMs = performance.now() - started;
   return {
+    historyMs,
+    restoreMs,
+    libraryMs,
     label,
     files: files.length,
     edges: graph.edges.length,
@@ -126,11 +158,18 @@ for (const count of [200, 1000]) {
 }
 const ms = (value) => value.toFixed(1);
 const report =
-  `# CodeMap v0.2 performance baseline\n\nMeasured ${new Date().toISOString()} on ${os.platform()} ${os.arch()}, ${os.cpus()[0]?.model}, Node ${process.version}. Single-run diagnostic measurements, not performance guarantees or CI thresholds.\n\n| Fixture | Files / edges | Collect ms | Cold analysis ms | Unchanged ms | One edit ms | Parsed / resolved on edit | File layout ms | Folder layout ms (nodes) |\n| --- | --- | --- | --- | --- | --- | --- | --- | --- |\n` +
+  `# CodeMap v0.4 performance baseline\n\nMeasured ${new Date().toISOString()} on ${os.platform()} ${os.arch()}, ${os.cpus()[0]?.model}, Node ${process.version}. Single-run diagnostic measurements, not performance guarantees or CI thresholds.\n\n| Fixture | Files / edges | Collect ms | Cold analysis ms | Unchanged ms | One edit ms | Parsed / resolved on edit | File layout ms | Folder layout ms (nodes) |\n| --- | --- | --- | --- | --- | --- | --- | --- | --- |\n` +
   rows
     .map(
       (row) =>
         `| ${row.label} | ${row.files} / ${row.edges} | ${ms(row.collectMs)} | ${ms(row.cold.milliseconds)} | ${ms(row.warm.milliseconds)} | ${ms(row.edit.milliseconds)} | ${row.edit.parsed} / ${row.edit.resolved} | ${ms(row.fileLayout)} | ${ms(row.folderLayout)} (${row.groups}) |`,
+    )
+    .join('\n') +
+  '\n\n| Fixture | Record 50 navigation visits ms | Reconcile saved view ms | Validate 50 saved views ms |\n| --- | --- | --- | --- |\n' +
+  rows
+    .map(
+      (row) =>
+        `| ${row.label} | ${ms(row.historyMs)} | ${ms(row.restoreMs)} | ${ms(row.libraryMs)} |`,
     )
     .join('\n') +
   '\n\nCollection uses disk reads in this standalone benchmark, not VS Code document loading. Layout uses the same Dagre dimensions/options in Node; it excludes Webview rendering. Update times exclude the 750 ms debounce. Synthetic chains stress layout depth; 1,000 files is a stress fixture, not a support guarantee.\n';

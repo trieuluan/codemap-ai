@@ -1,6 +1,6 @@
 # CodeMap AI
 
-Explore TypeScript and JavaScript file dependencies as an interactive graph inside VS Code. v0.3 adds editor synchronization, barrel routes, on-demand symbol nodes and dependency impact analysis, alongside folder views, filters, saved layouts and automatic incremental updates. The extension is read-only; AI editing is planned for later.
+Explore TypeScript and JavaScript file dependencies as an interactive graph inside VS Code. v0.4 adds navigation history, named Saved Views and architecture notes to the existing file/folder graph, symbol exploration, import routes and impact analysis. The extension is read-only; AI editing is planned for later.
 
 ## Run locally
 
@@ -121,3 +121,20 @@ Architecture: workspace adapter for editor/filesystem access; cached TypeScript 
 - `src/analyzer/` handles import resolution and static symbol linking; controller and scheduler modules handle live updates.
 
 Prettier configuration lives in `.prettierrc.json`. Run `pnpm run format` before committing source changes. Generated `dist/` and `out/` files are build artifacts; edit files under `src/`.
+
+## Navigation, Saved Views and notes (v0.4)
+
+- **← / →** navigate the last 50 visits in this panel: file/folder selection, symbol canvases, import/impact paths and investigations. Camera and positions are restored; dragging and panning do not create history entries. History resets when switching root or closing the panel.
+- **Saved Views** → **+ Save view** → enter a name → **Save current view**. Open, rename, replace or delete a named view in the sidebar. Saved views include filters, expanded/Peek groups, layout profiles, camera, selection and temporary symbol/path investigations. Search text is temporary. Auto Update and Follow editor keep their current settings when restoring a view.
+- Saved Views are stored per root in VS Code workspace state, independently of Reset View. Opening the graph always scans current source first. Missing files/symbols and broken paths are reconciled, with a notice; rename is treated as deletion plus addition.
+- Select a file and open **Notes** (or select a collapsed folder and scroll to **Architecture note**). Choose **UI / API / Data / Shared / Other**, enter a note, then **Save note**. Unsaved edits are marked explicitly. Roles/notes appear as a badge on the node, with note text on hover. Notes apply to that exact file or folder; folder tags do not propagate to children.
+- Notes and named views survive panel restart. Notes for missing targets remain in Saved Views for review/deletion. No rename history is inferred. Reset View clears the current layout/options, leaving named views and notes available.
+- Only UI metadata is stored. No source, AST or dependency snapshot is written to workspace storage; notes never edit source or create graph edges.
+
+Regression covers navigation branching/bounds, camera state, fresh-snapshot reconciliation, stable symbol anchors, corrupted storage, separate roots and library persistence across panel instances. Performance measurements for this repository plus 200/1,000-file fixtures are in [docs/BENCHMARK.md](docs/BENCHMARK.md); timings are diagnostic, not fixed CI thresholds.
+
+The Details sidebar uses **Connections / Symbols / Notes** sections. Import cards show a compact binding summary; expand the card to inspect source locations and barrel routes. Saved Views uses cards with view context, a **Restore view** action and a **⋯** menu for rename/replace/delete. Use **+ Save view** to name the current graph, and the library **Notes** section to review architecture notes.
+
+## Install a local package
+
+Run `pnpm dlx @vscode/vsce package --no-dependencies --skip-license` to create a local `.vsix` (both host and UI are bundled). In VS Code, use **Extensions: Install from VSIX…** and select the package, then reload the window. This packages locally without publishing to Marketplace.

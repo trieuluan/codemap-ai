@@ -455,3 +455,90 @@ suite('CodeMap editor and symbol navigation', () => {
     }
   });
 });
+
+suite('CodeMap saved views and architecture notes', () => {
+  test('persists library across panels, rejects foreign roots and does not store source', async () => {
+    const extension = vscode.extensions.all.find((item) => item.packageJSON.name === 'codemap-ai')!;
+    const rootId = vscode.workspace.workspaceFolders![0].uri.toString();
+    const data = new Map<string, unknown>();
+    const storage = {
+      get: <T>(key: string) => data.get(key) as T | undefined,
+      update: async (key: string, value: unknown) => {
+        data.set(key, structuredClone(value));
+      },
+    };
+    const { defaultView } = await import('../shared/view.js');
+    let panel = new CodeMapPanel(extension.extensionUri, () => {}, storage);
+    try {
+      await panel.handleMessage({ type: 'ready' });
+      const nodeId = vscode.Uri.joinPath(
+        vscode.workspace.workspaceFolders![0].uri,
+        'a.ts',
+      ).toString();
+      const location = {
+        view: { ...defaultView(), selected: nodeId },
+        peek: [],
+        positions: {},
+        source: 'must not persist',
+      };
+      await panel.handleMessage({
+        type: 'saveBookmark',
+        rootId: 'foreign',
+        name: 'Invalid',
+        location,
+      });
+      await panel.handleMessage({ type: 'saveBookmark', rootId, name: 'Overview', location });
+      await panel.handleMessage({
+        type: 'saveAnnotation',
+        rootId,
+        annotation: { target: { kind: 'file', id: nodeId }, text: 'Entry point', role: 'API' },
+      });
+      await panel.handleMessage({
+        type: 'saveAnnotation',
+        rootId,
+        annotation: { target: { kind: 'file', id: 'foreign' }, text: 'Invalid' },
+      });
+      const library = data.get(
+        `codemap.library.${rootId}`,
+      ) as import('../shared/library').WorkspaceLibrary;
+      assert.equal(library.views.length, 1);
+      assert.equal(library.annotations.length, 1);
+      assert.ok(!JSON.stringify(library).includes('must not persist'));
+      panel.dispose();
+      panel = new CodeMapPanel(extension.extensionUri, () => {}, storage);
+      const messages: import('../shared/model').HostMessage[] = [];
+      const observed = panel as unknown as {
+        post(message: import('../shared/model').HostMessage): void;
+      };
+      const post = observed.post.bind(panel);
+      observed.post = (message) => {
+        messages.push(message);
+        post(message);
+      };
+      await panel.handleMessage({ type: 'ready' });
+      assert.ok(
+        messages.some(
+          (m) =>
+            m.type === 'library' &&
+            m.library.views[0]?.name === 'Overview' &&
+            m.library.annotations[0]?.text === 'Entry point',
+        ),
+      );
+      const id = library.views[0].id;
+      await panel.handleMessage({ type: 'renameBookmark', rootId, id, name: 'Renamed' });
+      await panel.handleMessage({ type: 'deleteBookmark', rootId, id });
+      await panel.handleMessage({
+        type: 'deleteAnnotation',
+        rootId,
+        annotation: library.annotations[0],
+      });
+      const final = data.get(
+        `codemap.library.${rootId}`,
+      ) as import('../shared/library').WorkspaceLibrary;
+      assert.equal(final.views.length, 0);
+      assert.equal(final.annotations.length, 0);
+    } finally {
+      panel.dispose();
+    }
+  });
+});

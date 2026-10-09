@@ -1,4 +1,7 @@
 import * as vscode from 'vscode';
+import { LibraryStore } from './library-store';
+import { readAnnotation, annotationExists, targetKey } from './shared/library';
+import { readLocation } from './shared/navigation';
 import { randomBytes } from 'node:crypto';
 import { GraphController } from './controller';
 import { ViewStore, type StateStorage } from './view-store';
@@ -11,6 +14,7 @@ export class CodeMapPanel implements vscode.Disposable {
   private root?: vscode.WorkspaceFolder;
   private controller?: GraphController;
   private store: ViewStore;
+  private library: LibraryStore;
   private choosing = false;
   private disposed = false;
   private ready = false;
@@ -24,6 +28,7 @@ export class CodeMapPanel implements vscode.Disposable {
     private storage?: StateStorage,
     private log: (message: string) => void = () => {},
   ) {
+    this.library = new LibraryStore(storage);
     this.store = new ViewStore(storage, (error) => log(`View storage: ${String(error)}`));
     this.panel = vscode.window.createWebviewPanel('codemap', 'CodeMap', vscode.ViewColumn.Active, {
       enableScripts: true,
@@ -123,6 +128,77 @@ export class CodeMapPanel implements vscode.Disposable {
         case 'changeFolder':
           await this.refresh(true);
           break;
+        case 'saveBookmark':
+        case 'renameBookmark':
+        case 'deleteBookmark':
+        case 'saveAnnotation':
+        case 'deleteAnnotation': {
+          if (
+            !this.snapshot ||
+            !this.root ||
+            !('rootId' in message) ||
+            message.rootId !== this.root.uri.toString()
+          ) {
+            return;
+          }
+          const root = this.root.uri.toString();
+          const library = structuredClone(this.library.get(root));
+          if (message.type === 'saveAnnotation' || message.type === 'deleteAnnotation') {
+            const annotation = readAnnotation(
+              'annotation' in message ? message.annotation : undefined,
+            );
+            if (
+              !annotation ||
+              (message.type === 'saveAnnotation' &&
+                !annotationExists(annotation.target, this.snapshot))
+            ) {
+              return;
+            }
+            library.annotations = library.annotations.filter(
+              (a) => targetKey(a.target) !== targetKey(annotation.target),
+            );
+            if (message.type === 'saveAnnotation') {
+              library.annotations.push(annotation);
+            }
+          } else {
+            const id = 'id' in message && typeof message.id === 'string' ? message.id : undefined;
+            const existing = library.views.find((v) => v.id === id);
+            if (message.type === 'deleteBookmark') {
+              library.views = library.views.filter((v) => v.id !== id);
+            } else {
+              if (
+                !('name' in message) ||
+                typeof message.name !== 'string' ||
+                !message.name.trim() ||
+                message.name.length > 100
+              ) {
+                return;
+              }
+              if (message.type === 'renameBookmark') {
+                if (!existing) {
+                  return;
+                }
+                existing.name = message.name.trim();
+              } else {
+                const location = readLocation('location' in message ? message.location : undefined);
+                if (!location || (id && !existing) || (!existing && library.views.length >= 100)) {
+                  return;
+                }
+                const saved = {
+                  id: id ?? randomBytes(12).toString('hex'),
+                  name: message.name.trim(),
+                  location,
+                };
+                library.views = [...library.views.filter((v) => v.id !== id), saved];
+              }
+            }
+          }
+          await this.library.save(root, library);
+          if (this.root?.uri.toString() === root) {
+            this.post({ type: 'library', rootId: root, library: this.library.get(root) });
+          }
+          break;
+        }
         case 'saveView':
           if (
             'rootId' in message &&
@@ -296,6 +372,11 @@ export class CodeMapPanel implements vscode.Disposable {
             return;
           }
           this.snapshot = snapshot;
+          this.post({
+            type: 'library',
+            rootId: snapshot.root.id,
+            library: this.library.get(snapshot.root.id),
+          });
           const state = reconcileView(this.store.get(rootId), snapshot);
           this.store.save(rootId, state);
           this.post({ type: 'snapshot', snapshot, viewState: state });
@@ -327,6 +408,7 @@ export class CodeMapPanel implements vscode.Disposable {
     this.disposed = true;
     this.controller?.dispose();
     void this.store.flush();
+    void this.library.flush();
     for (const disposable of this.disposables) {
       disposable.dispose();
     }

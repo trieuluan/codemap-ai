@@ -1,4 +1,5 @@
-import React from 'react';
+import React, { useState } from 'react';
+import { PanelHeading, PanelSection, PanelTabs, ConnectionCard } from './InspectorParts';
 import type {
   DependencyEdge,
   DisplayNode,
@@ -10,9 +11,11 @@ import { groupId } from '../../shared/view';
 import { send } from '../bridge';
 import type { ImpactTarget } from '../../shared/investigation';
 import { SymbolExplorer } from './InvestigationPanel';
+import { OutsideDependencies } from './OutsideDependencies';
 import { ImportSiteDetails } from './ImportSiteDetails';
 
 interface DetailsPanelProps {
+  annotationEditor?: React.ReactNode;
   snapshot?: GraphSnapshot;
   view: GraphViewState;
   file?: FileNode;
@@ -34,6 +37,7 @@ interface DetailsPanelProps {
 }
 
 export function DetailsPanel({
+  annotationEditor,
   snapshot,
   view,
   file,
@@ -53,184 +57,246 @@ export function DetailsPanel({
   onExpand,
   onCollapse,
 }: DetailsPanelProps) {
+  const [tab, setTab] = useState<'connections' | 'symbols' | 'notes'>('connections');
+  const warnings =
+    snapshot?.warnings.filter(
+      (warning) => !file || !warning.fileId || warning.fileId === file.id,
+    ) ?? [];
   return (
-    <aside>
+    <aside className="inspector" aria-label="Source details">
       {inspectedEdge ? (
         <>
-          <button className="link" onClick={() => onBack()}>
-            ← Back
-          </button>
-          <h2>Import relationships</h2>
-          <p>
-            {inspectedEdge.count} file relationships · {inspectedEdge.symbolCount ?? 0} imported
-            symbols
-          </p>
-          <p className="muted">Imports describe dependencies, not proof of a function call.</p>
-          {inspectedImports.map((edge) => (
-            <div className="dependency" key={edge.id}>
-              <small>{filesById.get(edge.source)?.path} →</small>
-              <button className="link" onClick={() => onSelectFile(edge.target)}>
-                {filesById.get(edge.target)?.path}
+          <PanelHeading
+            eyebrow="Connection details"
+            title="Import relationships"
+            action={
+              <button
+                className="icon-button"
+                title="Back to details"
+                aria-label="Back to details"
+                onClick={onBack}
+              >
+                ←
               </button>
-              {edge.sites.map((site) => (
-                <ImportSiteDetails
-                  key={site.id}
-                  nodeId={edge.source}
-                  site={site}
-                  filesById={filesById}
-                />
-              ))}
+            }
+          />
+          <div className="inspector-body">
+            <div className="inspector-stats">
+              <div>
+                <strong>{inspectedEdge.count}</strong>
+                <span>File relations</span>
+              </div>
+              <div>
+                <strong>{inspectedEdge.symbolCount ?? 0}</strong>
+                <span>Imported symbols</span>
+              </div>
             </div>
-          ))}
+            <p className="helper-text">A → B means A imports from B.</p>
+            {inspectedImports.map((edge) => (
+              <div key={edge.id}>
+                <p className="connection-source">{filesById.get(edge.source)?.path} →</p>
+                <ConnectionCard
+                  edge={edge}
+                  nodeId={edge.target}
+                  filesById={filesById}
+                  onSelectFile={onSelectFile}
+                />
+              </div>
+            ))}
+          </div>
         </>
       ) : group ? (
         <>
-          <h2>{group.path}</h2>
-          <p>
-            {group.members.length} files · {group.internalEdges} internal dependencies
-          </p>
-          {!!group.related?.length && (
-            <>
-              <h3>Imported by {contextFile?.name}</h3>
-              {group.related.map((item) => (
-                <div className="dependency" key={item.fileId}>
-                  <button className="link" onClick={() => onSelectFile(item.fileId)}>
-                    {filesById.get(item.fileId)?.path}
-                  </button>
-                  {item.sites.map((site) => (
-                    <ImportSiteDetails
-                      key={site.id}
-                      nodeId={contextFile!.id}
-                      site={site}
-                      filesById={filesById}
-                    />
-                  ))}
-                </div>
-              ))}
-              <button onClick={() => onPeek(group.id)}>
-                Peek {group.related.length} related files
+          <PanelHeading
+            eyebrow="Folder details"
+            title={group.path.split('/').at(-1) ?? group.path}
+            subtitle={group.path}
+          />
+          <div className="inspector-body">
+            <div className="inspector-stats">
+              <div>
+                <strong>{group.members.length}</strong>
+                <span>Files</span>
+              </div>
+              <div>
+                <strong>{group.internalEdges}</strong>
+                <span>Internal imports</span>
+              </div>
+            </div>
+            <div className="inspector-actions">
+              <button className="primary" onClick={() => onExpand(group.id)}>
+                Expand Folder
               </button>
-            </>
-          )}
-          <p>
-            <button className="primary" onClick={() => onExpand(group.id)}>
-              Expand Folder
-            </button>
-          </p>
-          <h3>Members</h3>
-          {group.members.map((id) => (
-            <button className="link" key={id} onClick={() => onSelectFile(id)}>
-              {filesById.get(id)?.path}
-            </button>
-          ))}
+              {!!group.related?.length && (
+                <button onClick={() => onPeek(group.id)}>Peek {group.related.length} files</button>
+              )}
+            </div>
+            {!!group.related?.length && (
+              <PanelSection title={`Imported by ${contextFile?.name}`} count={group.related.length}>
+                {group.related.map((item) => (
+                  <div className="connection-card" key={item.fileId}>
+                    <button className="file-row" onClick={() => onSelectFile(item.fileId)}>
+                      <span className="file-row-text">
+                        <strong>{filesById.get(item.fileId)?.name}</strong>
+                        <small>{filesById.get(item.fileId)?.path}</small>
+                      </span>
+                    </button>
+                    <details className="connection-imports">
+                      <summary>Import details</summary>
+                      {item.sites.map((site) => (
+                        <ImportSiteDetails
+                          key={site.id}
+                          nodeId={contextFile!.id}
+                          site={site}
+                          filesById={filesById}
+                        />
+                      ))}
+                    </details>
+                  </div>
+                ))}
+              </PanelSection>
+            )}
+            <PanelSection
+              title="Members"
+              count={group.members.length}
+              open={group.members.length <= 12}
+            >
+              {group.members.map((id) => (
+                <button className="file-row" key={id} onClick={() => onSelectFile(id)}>
+                  <span className="file-row-text">
+                    <strong>{filesById.get(id)?.name}</strong>
+                    <small>{filesById.get(id)?.path}</small>
+                  </span>
+                  <span aria-hidden="true">↗</span>
+                </button>
+              ))}
+            </PanelSection>
+            {annotationEditor}
+          </div>
         </>
       ) : file ? (
         <>
-          <h2>{file.name}</h2>
-          <p className="path">{file.path}</p>
-          <span className="badge">{file.language}</span>
-          <p>
-            <button className="primary" onClick={() => send({ type: 'openFile', nodeId: file.id })}>
-              Open Source
-            </button>
-          </p>
-          {view.mode === 'folders' &&
-            groupId(file, view.depth) &&
-            view.expanded.includes(groupId(file, view.depth)!) && (
-              <button onClick={() => onCollapse(groupId(file, view.depth)!)}>
-                Collapse Folder
-              </button>
-            )}
-          <p>
-            <button onClick={() => onImpact({ nodeId: file.id })}>Analyze file impact</button>
-          </p>
-          <SymbolExplorer
-            file={file}
-            shown={symbolsShown}
-            onToggle={onToggleSymbols}
-            onImpact={onImpact}
+          <PanelHeading
+            eyebrow="File details"
+            title={file.name}
+            subtitle={file.path}
+            action={
+              <span className="badge">
+                {file.language === 'typescript'
+                  ? 'TS'
+                  : file.language === 'javascript'
+                    ? 'JS'
+                    : file.language}
+              </span>
+            }
           />
-          <h3>
-            Dependencies <span>{outgoing.length}</span>
-          </h3>
-          {outgoing.length ? (
-            outgoing.map((edge) => (
-              <div className="dependency" key={edge.id}>
-                <button className="link" onClick={() => onSelectFile(edge.target)}>
-                  {filesById.get(edge.target)?.path}
-                </button>
-                {edge.sites.map((site) => (
-                  <ImportSiteDetails
-                    key={site.id}
-                    nodeId={file.id}
-                    site={site}
-                    filesById={filesById}
-                  />
-                ))}
+          <div className="inspector-overview">
+            <div className="inspector-stats">
+              <div>
+                <strong>{outgoing.length}</strong>
+                <span>Imports</span>
               </div>
-            ))
-          ) : (
-            <p className="muted">No internal dependencies.</p>
-          )}
-          <h3>
-            Dependents <span>{incoming.length}</span>
-          </h3>
-          {incoming.length ? (
-            incoming.map((edge) => (
-              <div className="dependency" key={edge.id}>
-                <button className="link" onClick={() => onSelectFile(edge.source)}>
-                  {filesById.get(edge.source)?.path}
-                </button>
-                {edge.sites.map((site) => (
-                  <ImportSiteDetails
-                    key={site.id}
-                    nodeId={edge.source}
-                    site={site}
-                    filesById={filesById}
-                  />
-                ))}
+              <div>
+                <strong>{incoming.length}</strong>
+                <span>Used by</span>
               </div>
-            ))
-          ) : (
-            <p className="muted">No internal dependents.</p>
-          )}
-          <h3>
-            Outside graph <span>{file.outside.length}</span>
-          </h3>
-          {file.outside.map((item) => (
-            <div className="dependency" key={item.site.id}>
-              <span className={`badge ${item.status}`}>{item.status}</span>
-              {
-                <ImportSiteDetails
-                  key={item.site.id}
-                  nodeId={file.id}
-                  site={item.site}
-                  filesById={filesById}
-                />
-              }
-              {item.resolvedPath && <small className="path">{item.resolvedPath}</small>}
+              <div>
+                <strong>{file.declarations?.length ?? 0}</strong>
+                <span>Symbols</span>
+              </div>
             </div>
-          ))}
+            <div className="inspector-actions">
+              <button
+                className="primary"
+                onClick={() => send({ type: 'openFile', nodeId: file.id })}
+              >
+                Open Source ↗
+              </button>
+              <button onClick={() => onImpact({ nodeId: file.id })}>Analyze impact</button>
+              {view.mode === 'folders' &&
+                groupId(file, view.depth) &&
+                view.expanded.includes(groupId(file, view.depth)!) && (
+                  <button
+                    className="quiet-button"
+                    onClick={() => onCollapse(groupId(file, view.depth)!)}
+                  >
+                    Collapse Folder
+                  </button>
+                )}
+            </div>
+          </div>
+          <PanelTabs
+            value={tab}
+            onChange={setTab}
+            tabs={[
+              { id: 'connections', label: 'Connections' },
+              { id: 'symbols', label: 'Symbols', count: file.declarations?.length ?? 0 },
+              { id: 'notes', label: 'Notes' },
+            ]}
+          />
+          <div className="inspector-body" key={file.id}>
+            {tab === 'connections' && (
+              <>
+                <PanelSection title="Imports" count={outgoing.length}>
+                  {outgoing.length ? (
+                    outgoing.map((edge) => (
+                      <ConnectionCard
+                        key={edge.id}
+                        edge={edge}
+                        nodeId={edge.target}
+                        filesById={filesById}
+                        onSelectFile={onSelectFile}
+                      />
+                    ))
+                  ) : (
+                    <p className="helper-text">No internal dependencies.</p>
+                  )}
+                </PanelSection>
+                <PanelSection title="Used by" count={incoming.length}>
+                  {incoming.length ? (
+                    incoming.map((edge) => (
+                      <ConnectionCard
+                        key={edge.id}
+                        edge={edge}
+                        nodeId={edge.source}
+                        filesById={filesById}
+                        onSelectFile={onSelectFile}
+                      />
+                    ))
+                  ) : (
+                    <p className="helper-text">No internal dependents.</p>
+                  )}
+                </PanelSection>
+                <PanelSection title="Outside graph" count={file.outside.length} open={false}>
+                  <OutsideDependencies file={file} filesById={filesById} />
+                </PanelSection>
+              </>
+            )}
+            {tab === 'symbols' && (
+              <SymbolExplorer
+                file={file}
+                shown={symbolsShown}
+                onToggle={onToggleSymbols}
+                onImpact={onImpact}
+              />
+            )}
+            <div hidden={tab !== 'notes'}>{annotationEditor}</div>
+          </div>
         </>
       ) : (
-        <>
-          <h2>Explore your workspace</h2>
-          <p className="muted">Select a file or folder to inspect its dependencies.</p>
-          <p className="legend">A → B: A imports or re-exports B</p>
-          <p className="muted">
-            View Options groups folders, filters files and focuses your exploration. Auto Update
-            follows unsaved source changes.
-          </p>
-        </>
+        <div className="inspector-empty">
+          <span className="empty-mark" aria-hidden="true">
+            ⌘
+          </span>
+          <h2>Explore your code</h2>
+          <p>Select a file or folder to see connections, symbols and architecture notes.</p>
+          <span className="legend">A → B: A imports from B</span>
+        </div>
       )}
-      {!!snapshot?.warnings.length && (
-        <section className="warnings">
-          <h3>
-            Scan warnings <span>{snapshot.warnings.length}</span>
-          </h3>
-          {snapshot.warnings
-            .filter((warning) => !file || !warning.fileId || warning.fileId === file.id)
-            .map((warning, index) => (
+      {!!warnings.length && (
+        <div className="inspector-body warnings">
+          <PanelSection title="Scan warnings" count={warnings.length} open={false}>
+            {warnings.map((warning, index) => (
               <p key={index}>
                 {warning.fileId && (
                   <button className="link" onClick={() => onSelectFile(warning.fileId!)}>
@@ -240,7 +306,8 @@ export function DetailsPanel({
                 {warning.message}
               </p>
             ))}
-        </section>
+          </PanelSection>
+        </div>
       )}
     </aside>
   );

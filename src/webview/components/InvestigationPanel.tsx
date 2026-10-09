@@ -1,5 +1,6 @@
 import React, { useMemo } from 'react';
 import { send } from '../bridge';
+import { PanelHeading } from './InspectorParts';
 import type { FileNode, GraphSnapshot } from '../../shared/model';
 import { analyzeImpact, type ImpactTarget } from '../../shared/investigation';
 
@@ -26,49 +27,58 @@ export function InvestigationPanel({
   const symbol = file?.declarations?.find((item) => item.id === target.symbolId);
   const entries = useMemo(() => analyzeImpact(snapshot, target), [snapshot, target]);
   return (
-    <aside aria-label="Impact analysis">
-      <button className="link" onClick={onClose}>
-        ← Back to details
-      </button>
-      <h2>Potential impact</h2>
-      <p className="path">
-        {file?.path}
-        {symbol ? ` · ${symbol.name}` : ''}
-      </p>
-      <p className="muted">
-        Dependency reachability, not proof of runtime behavior or a function call.
-      </p>
-      {target.symbolId && (
-        <p className="muted">
-          Known static bindings and barrel routes, then file dependents of their consumers.
-          Namespace access, computed exports and external consumers are not covered.
-        </p>
-      )}
-      <p>
-        {entries.filter((entry) => entry.direct).length}{' '}
-        {target.symbolId ? 'known bindings' : 'direct dependents'} ·{' '}
-        {entries.filter((entry) => !entry.direct).length} indirect files
-      </p>
-      {!entries.length && (
-        <p className="muted">
-          No {target.symbolId ? 'statically linked consumers' : 'dependents'} found in this
-          workspace.
-        </p>
-      )}
-      {entries.map((entry) => (
-        <section className="dependency" key={entry.nodeId}>
-          <button className="link" onClick={() => onSelectFile(entry.nodeId)}>
-            {filesById.get(entry.nodeId)?.path}
+    <aside className="inspector" aria-label="Impact analysis">
+      <PanelHeading
+        eyebrow="Dependency analysis"
+        title="Potential impact"
+        subtitle={file?.path + (symbol ? ` · ${symbol.name}` : '')}
+        action={
+          <button
+            className="icon-button"
+            aria-label="Back to details"
+            title="Back to details"
+            onClick={onClose}
+          >
+            ←
           </button>
-          <span className="badge">
-            {entry.direct ? (target.symbolId ? 'binding' : 'direct') : 'indirect'}
-          </span>
-          <p className="path">
-            {entry.path.map((id) => filesById.get(id)?.path ?? id).join(' → ')}
+        }
+      />
+      <div className="inspector-body">
+        <p className="muted">
+          Dependency reachability, not proof of runtime behavior or a function call.
+        </p>
+        {target.symbolId && (
+          <p className="muted">
+            Known static bindings and barrel routes, then file dependents of their consumers.
+            Namespace access, computed exports and external consumers are not covered.
           </p>
-          <button onClick={() => onShowPath(entry.path)}>Show path on graph</button>
-        </section>
-      ))}
+        )}
+        <p>
+          {entries.filter((entry) => entry.direct).length}{' '}
+          {target.symbolId ? 'known bindings' : 'direct dependents'} ·{' '}
+          {entries.filter((entry) => !entry.direct).length} indirect files
+        </p>
+        {!entries.length && (
+          <p className="muted">
+            No {target.symbolId ? 'statically linked consumers' : 'dependents'} found in this
+            workspace.
+          </p>
+        )}
+        {entries.map((entry) => (
+          <section className="connection-card impact-card" key={entry.nodeId}>
+            <button className="link" onClick={() => onSelectFile(entry.nodeId)}>
+              {filesById.get(entry.nodeId)?.path}
+            </button>
+            <span className="badge">
+              {entry.direct ? (target.symbolId ? 'binding' : 'direct') : 'indirect'}
+            </span>
+            <p className="path">
+              {entry.path.map((id) => filesById.get(id)?.path ?? id).join(' → ')}
+            </p>
+            <button onClick={() => onShowPath(entry.path)}>Show path on graph</button>
+          </section>
+        ))}
+      </div>
     </aside>
   );
 }

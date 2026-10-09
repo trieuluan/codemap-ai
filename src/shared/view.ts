@@ -65,7 +65,7 @@ function readLayout(value: unknown): GraphLayoutState {
     finite(state.viewport.zoom) &&
     state.viewport.zoom >= 0.05 &&
     state.viewport.zoom <= 2
-      ? state.viewport
+      ? { x: state.viewport.x, y: state.viewport.y, zoom: state.viewport.zoom }
       : undefined;
   return { positions, viewport };
 }
@@ -125,7 +125,14 @@ export function readView(value: unknown): GraphViewState {
   }
   return {
     ...defaultView(),
-    ...state,
+    mode: state.mode,
+    depth: state.depth,
+    expanded: [...state.expanded],
+    folder: state.folder,
+    hideTests: state.hideTests,
+    hideIsolated: state.hideIsolated,
+    focus: state.focus,
+    autoUpdate: state.autoUpdate,
     version: 3,
     followEditor: state.followEditor === true,
     layouts,

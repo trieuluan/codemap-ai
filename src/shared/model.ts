@@ -1,3 +1,5 @@
+import type { WorkspaceLibrary, Annotation } from './library';
+import type { NavigationLocation } from './navigation';
 export type RelationKind = 'import' | 'type-import' | 're-export' | 'require' | 'dynamic-import';
 export type SymbolKind = 'function' | 'class' | 'type' | 'interface' | 'enum' | 'value';
 export interface SourceSymbol {
@@ -77,6 +79,17 @@ export type UiMessage =
         | 'resetView'
         | 'revealActiveFile';
     }
+  | {
+      type: 'saveBookmark';
+      rootId: string;
+      name: string;
+      location: NavigationLocation;
+      id?: string;
+    }
+  | { type: 'renameBookmark'; rootId: string; id: string; name: string }
+  | { type: 'deleteBookmark'; rootId: string; id: string }
+  | { type: 'saveAnnotation'; rootId: string; annotation: Annotation }
+  | { type: 'deleteAnnotation'; rootId: string; annotation: Annotation }
   | { type: 'saveView'; rootId: string; state: GraphViewState }
   | { type: 'autoUpdate'; enabled: boolean }
   | { type: 'layoutStats'; milliseconds: number; nodes: number }
@@ -85,6 +98,7 @@ export type UiMessage =
   | { type: 'openDeclaration'; nodeId: string; siteId: string; symbolId: string }
   | { type: 'openImport'; nodeId: string; siteId: string };
 export type HostMessage =
+  | { type: 'library'; rootId: string; library: WorkspaceLibrary }
   | { type: 'activeFile'; nodeId?: string; reveal: boolean }
   | { type: 'snapshot'; snapshot: GraphSnapshot; viewState?: GraphViewState }
   | { type: 'status'; scanning: boolean; message: string; completed?: number; total?: number }

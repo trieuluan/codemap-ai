@@ -1,3 +1,8 @@
+import { readLibrary, targetKey } from '../shared/library';
+import { reconcileLocation, resolveAnchor, type NavigationLocation } from '../shared/navigation';
+import { symbolNodeId } from '../shared/investigation';
+import { useHistory } from './hooks/useHistory';
+import { LibraryPanel, AnnotationEditor } from './components/WorkspaceLibrary';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ReactFlow,
@@ -43,6 +48,9 @@ export function App() {
   const viewRef = useRef(view);
   const rootId = useRef<string | undefined>(undefined);
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
+  const [library, setLibrary] = useState(() => readLibrary(undefined));
+  const [libraryOpen, setLibraryOpen] = useState(false);
+  const [notice, setNotice] = useState('');
   const [query, setQuery] = useState('');
   const [optionsOpen, setOptionsOpen] = useState(false);
   const [sync, setSync] = useState<SyncState>('up-to-date');
@@ -67,7 +75,10 @@ export function App() {
     : symbolsFileId
       ? `symbols:${symbolsFileId}`
       : layoutKey(view);
-  const clearInspection = () => {
+  const clearInspection = (record = true) => {
+    if (record) {
+      history.begin();
+    }
     setTracePath(undefined);
     setSymbolsFileId(undefined);
     setSelectedSymbolId(undefined);
@@ -76,6 +87,7 @@ export function App() {
     readyToSaveViewport.current = false;
   };
   const showPath = (path: string[]) => {
+    history.begin();
     pendingCenter.current = undefined;
     fitMembers.current = undefined;
     setTracePath(path);
@@ -89,6 +101,7 @@ export function App() {
   const arrangePeek = useRef(false);
   const {
     flow,
+    restoredViewport,
     canvasRef,
     fitCanvas,
     needsViewport,
@@ -103,6 +116,76 @@ export function App() {
       send({ type: 'saveView', rootId: rootId.current, state: next });
     }
   }, []);
+  const capture = (): NavigationLocation => {
+    const selected = snapshot?.nodes
+      .flatMap((n) => (n.declarations ?? []).map((symbol) => ({ nodeId: n.id, symbol })))
+      .find((item) => symbolNodeId(item.nodeId, item.symbol.id) === selectedSymbolId);
+    const impactSymbol = snapshot?.nodes
+      .find((n) => n.id === impactTarget?.nodeId)
+      ?.declarations?.find((symbol) => symbol.id === impactTarget?.symbolId);
+    return {
+      view: {
+        ...viewRef.current,
+        viewport: inspecting ? viewRef.current.viewport : flow.getViewport(),
+      },
+      viewport: flow.getViewport(),
+      path: tracePath,
+      symbolsFileId,
+      symbol: selected
+        ? { nodeId: selected.nodeId, name: selected.symbol.name, kind: selected.symbol.kind }
+        : undefined,
+      impact: impactTarget
+        ? {
+            nodeId: impactTarget.nodeId,
+            symbol: impactSymbol
+              ? { nodeId: impactTarget.nodeId, name: impactSymbol.name, kind: impactSymbol.kind }
+              : undefined,
+          }
+        : undefined,
+      contextId,
+      group: groupSelection,
+      peek: peekGroups,
+      positions: { ...inspectionPositions.current },
+    };
+  };
+  const restore = (saved: NavigationLocation) => {
+    if (!snapshot) {
+      return;
+    }
+    const { location, stale } = reconcileLocation(saved, snapshot);
+    setNotice(
+      stale
+        ? 'Some files, symbols, or path edges no longer exist. Restored the available view.'
+        : '',
+    );
+    setTracePath(location.path);
+    setSymbolsFileId(location.symbolsFileId);
+    const symbol = resolveAnchor(snapshot, location.symbol);
+    setSelectedSymbolId(
+      symbol && location.symbol ? symbolNodeId(location.symbol.nodeId, symbol.id) : undefined,
+    );
+    const impactSymbol = resolveAnchor(snapshot, location.impact?.symbol);
+    setImpactTarget(
+      location.impact ? { nodeId: location.impact.nodeId, symbolId: impactSymbol?.id } : undefined,
+    );
+    setContextId(location.contextId);
+    setGroupSelection(location.group);
+    setPeekGroups(location.peek);
+    setEdgeSelection(undefined);
+    inspectionPositions.current = { ...location.positions };
+    arrangePeek.current = false;
+    pendingCenter.current = undefined;
+    fitMembers.current = undefined;
+    readyToSaveViewport.current = false;
+    needsViewport.current = true;
+    restoredViewport.current = location.viewport;
+    applyView({
+      ...location.view,
+      autoUpdate: viewRef.current.autoUpdate,
+      followEditor: viewRef.current.followEditor,
+    });
+  };
+  const history = useHistory(snapshot?.root.id, capture, restore);
   const updateView = (patch: Partial<GraphViewState>) =>
     applyView({ ...viewRef.current, ...patch });
   const changeLayout = (mode: GraphViewState['mode'], depth = viewRef.current.depth) => {
@@ -127,6 +210,11 @@ export function App() {
   };
   useHostMessages((message: HostMessage) => {
     switch (message.type) {
+      case 'library':
+        if (message.rootId === rootId.current) {
+          setLibrary(readLibrary(message.library));
+        }
+        break;
       case 'activeFile':
         setActiveFileId(message.nodeId);
         if (message.reveal && message.nodeId) {
@@ -137,7 +225,7 @@ export function App() {
         const next = message.snapshot;
         const sameRoot = rootId.current === next.root.id;
         if (!sameRoot) {
-          clearInspection();
+          clearInspection(false);
           setImpactTarget(undefined);
           setQuery('');
           setContextId(undefined);
@@ -151,6 +239,26 @@ export function App() {
           sameRoot ? viewRef.current : readView(message.viewState),
           next,
         );
+        if (sameRoot && snapshot) {
+          const previous = capture();
+          const symbol = resolveAnchor(next, previous.symbol);
+          if (previous.symbol) {
+            setSelectedSymbolId(
+              symbol ? symbolNodeId(previous.symbol.nodeId, symbol.id) : undefined,
+            );
+          }
+          if (previous.impact?.symbol) {
+            const impactSymbol = resolveAnchor(next, previous.impact.symbol);
+            setImpactTarget(
+              impactSymbol
+                ? { nodeId: previous.impact.nodeId, symbolId: impactSymbol.id }
+                : undefined,
+            );
+          }
+          if (viewRef.current.selected && !restored.selected) {
+            setNotice('The selected file or folder was deleted or renamed. Selection cleared.');
+          }
+        }
         // Initial viewState is sent before the first snapshot.
         applyView(restored, false);
         setSnapshot(next);
@@ -163,7 +271,7 @@ export function App() {
       }
       case 'viewState':
         setRevealRequest(undefined);
-        clearInspection();
+        clearInspection(false);
         setImpactTarget(undefined);
         rootId.current = message.rootId;
         applyView(readView(message.state), false);
@@ -187,10 +295,13 @@ export function App() {
         break;
       case 'empty':
         setRevealRequest(undefined);
-        clearInspection();
+        clearInspection(false);
         setImpactTarget(undefined);
         setActiveFileId(undefined);
         rootId.current = undefined;
+        setLibrary(readLibrary(undefined));
+        setLibraryOpen(false);
+        setNotice('');
         needsViewport.current = true;
         readyToSaveViewport.current = false;
         setSnapshot(undefined);
@@ -255,6 +366,7 @@ export function App() {
     [display],
   );
   const togglePeek = (id?: string) => {
+    history.begin();
     setEdgeSelection(undefined);
     setPeekGroups((current) =>
       id ? (current.includes(id) ? current.filter((group) => group !== id) : [...current, id]) : [],
@@ -282,6 +394,14 @@ export function App() {
         label: (
           <FileNodeLabel
             node={node}
+            annotation={library.annotations.find(
+              (a) =>
+                targetKey(a.target) ===
+                targetKey({
+                  kind: node.kind === 'folder' ? 'folder' : 'file',
+                  id: node.kind === 'folder' ? node.path : node.id,
+                }),
+            )}
             contextFile={contextFile}
             filesById={filesById}
             onPeek={togglePeek}
@@ -327,7 +447,7 @@ export function App() {
         },
       });
     }
-  }, [display, baseEdges, setNodes, applyView, inspecting, canvasKey]);
+  }, [display, baseEdges, setNodes, applyView, inspecting, canvasKey, library]);
   const selectFile = (id: string) => {
     if (!snapshot) {
       return;
@@ -355,7 +475,8 @@ export function App() {
       return;
     }
     if (symbolsFileId && !snapshot.nodes.some((node) => node.id === symbolsFileId)) {
-      clearInspection();
+      clearInspection(false);
+      setNotice('The inspected file or path is no longer available. Returned to graph.');
     }
     if (
       impactTarget &&
@@ -373,7 +494,8 @@ export function App() {
       graphForPath(snapshot, tracePath).edges.length <
         new Set(tracePath.slice(1).map((id, index) => JSON.stringify([tracePath[index], id]))).size
     ) {
-      clearInspection();
+      clearInspection(false);
+      setNotice('The inspected file or path is no longer available. Returned to graph.');
     }
   }, [snapshot]);
   const matches = useMemo(
@@ -476,11 +598,13 @@ export function App() {
   const resetFilters = () =>
     updateView({ folder: '', hideTests: false, hideIsolated: false, focus: 0 });
   const expand = (id: string) => {
+    history.begin();
     fitMembers.current = display.nodes.find((node) => node.id === id)?.members;
     updateView({ expanded: [...new Set([...view.expanded, id])] });
     setGroupSelection(undefined);
   };
   const collapse = (id: string) => {
+    history.begin();
     fitMembers.current = [id];
     updateView({ expanded: view.expanded.filter((group) => group !== id), focus: 0 });
     setGroupSelection(id);
@@ -510,6 +634,11 @@ export function App() {
     <ShowPathContext.Provider value={showPath}>
       <div className="app">
         <GraphToolbar
+          canBack={history.canBack}
+          canForward={history.canForward}
+          onBack={() => history.move(-1)}
+          onForward={() => history.move(1)}
+          onLibrary={() => setLibraryOpen(!libraryOpen)}
           workspaceName={snapshot?.root.name ?? 'Workspace'}
           query={query}
           matches={matches}
@@ -547,13 +676,19 @@ export function App() {
           <div className="context-bar">
             <strong>{tracePath ? 'Import / impact path' : 'Symbol declarations'}</strong>
             <span>Temporary canvas · saved layout is preserved</span>
-            <button onClick={clearInspection}>Back to graph</button>
+            <button onClick={() => clearInspection()}>Back to graph</button>
           </div>
         )}
         {contextFile && view.mode === 'folders' && !inspecting && (
           <div className="context-bar">
             Import context: <strong>{contextFile.path}</strong>
             <span>Click an arrow to inspect imports · Peek shows only related files</span>
+          </div>
+        )}
+        {notice && (
+          <div className="context-bar" role="status">
+            {notice}
+            <button onClick={() => setNotice('')}>Dismiss</button>
           </div>
         )}
         {error && (
@@ -569,11 +704,13 @@ export function App() {
               edges={edges}
               onNodesChange={onNodesChange}
               onEdgeClick={(_event, edge) => {
+                history.begin();
                 if (!display.edges.find((item) => item.id === edge.id)?.relation) {
                   setEdgeSelection(edge.id);
                 }
               }}
               onNodeClick={(_event, node) => {
+                history.begin();
                 const symbol = display.nodes.find(
                   (item) => item.id === node.id && item.kind === 'symbol',
                 );
@@ -663,7 +800,18 @@ export function App() {
               </div>
             )}
           </main>
-          {impactTarget && snapshot ? (
+          {libraryOpen && snapshot ? (
+            <LibraryPanel
+              library={library}
+              snapshot={snapshot}
+              capture={capture}
+              restore={(location) => {
+                history.begin();
+                restore(location);
+              }}
+              onClose={() => setLibraryOpen(false)}
+            />
+          ) : impactTarget && snapshot ? (
             <InvestigationPanel
               snapshot={snapshot}
               target={impactTarget}
@@ -673,6 +821,26 @@ export function App() {
             />
           ) : (
             <DetailsPanel
+              annotationEditor={
+                snapshot && (file || group)
+                  ? (() => {
+                      const target = file
+                        ? { kind: 'file' as const, id: file.id }
+                        : { kind: 'folder' as const, id: group!.path };
+                      const annotation = library.annotations.find(
+                        (a) => targetKey(a.target) === targetKey(target),
+                      );
+                      return (
+                        <AnnotationEditor
+                          key={targetKey(target) + JSON.stringify(annotation)}
+                          rootId={snapshot.root.id}
+                          target={target}
+                          annotation={annotation}
+                        />
+                      );
+                    })()
+                  : undefined
+              }
               snapshot={snapshot}
               view={view}
               file={file}
@@ -685,6 +853,7 @@ export function App() {
               incoming={incoming}
               symbolsShown={symbolsFileId === file?.id && !!file}
               onToggleSymbols={() => {
+                history.begin();
                 if (symbolsFileId === file?.id) {
                   clearInspection();
                   return;
@@ -700,7 +869,10 @@ export function App() {
                 needsViewport.current = true;
                 readyToSaveViewport.current = false;
               }}
-              onImpact={setImpactTarget}
+              onImpact={(target) => {
+                history.begin();
+                setImpactTarget(target);
+              }}
               onBack={() => setEdgeSelection(undefined)}
               onSelectFile={selectFile}
               onPeek={togglePeek}

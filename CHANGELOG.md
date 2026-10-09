@@ -1,5 +1,13 @@
 # Change Log
 
+## 0.4.0
+
+- Add bounded Back/Forward history for graph selection, symbols and import/impact paths, including camera restoration.
+- Save, open, rename, replace and delete named views per workspace root against freshly scanned source.
+- Add architecture notes and role badges for files/folders without changing source or dependency data.
+- Reconcile deleted targets and broken paths, retain orphan notes and anchor symbols by name/kind across source offsets.
+- Validate stored UI metadata, cover persistence across panels and update performance baselines for this repo and 200/1,000-file fixtures.
+
 ## 0.3.0
 
 - Highlight the active editor file, add Reveal Active File and persist optional Follow editor per root.

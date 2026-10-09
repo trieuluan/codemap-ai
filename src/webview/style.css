@@ -393,3 +393,36 @@ summary {
 .symbol-explorer {
   margin: 12px 0;
 }
+
+.architecture-badge {
+  float: right;
+  font-size: 10px;
+  font-weight: normal;
+  padding: 1px 5px;
+  border: 1px solid var(--vscode-focusBorder);
+  border-radius: 4px;
+}
+.annotation-editor {
+  border-top: 1px solid var(--vscode-panel-border);
+  margin-top: 16px;
+  padding-top: 8px;
+}
+.annotation-editor textarea {
+  width: 100%;
+  box-sizing: border-box;
+}
+textarea {
+  color: var(--vscode-input-foreground);
+  background: var(--vscode-input-background);
+  border: 1px solid var(--vscode-input-border, var(--vscode-panel-border));
+  font: inherit;
+  resize: vertical;
+}
+.annotation-editor label {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.architecture-text {
+  white-space: pre-wrap;
+}

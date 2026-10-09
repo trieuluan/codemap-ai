@@ -1,7 +1,9 @@
+import type { Annotation } from '../../shared/library';
 import React from 'react';
 import type { DisplayNode, FileNode } from '../../shared/model';
 
 interface FileNodeLabelProps {
+  annotation?: Annotation;
   node: DisplayNode;
   contextFile?: FileNode;
   filesById: Map<string, FileNode>;
@@ -10,6 +12,7 @@ interface FileNodeLabelProps {
 }
 
 export function FileNodeLabel({
+  annotation,
   node,
   contextFile,
   filesById,
@@ -21,6 +24,11 @@ export function FileNodeLabel({
       <strong>
         {node.kind === 'folder' ? '▣ ' : node.kind === 'symbol' ? '◇ ' : ''}
         {node.label}
+        {annotation && (
+          <span className="architecture-badge" title={annotation.text}>
+            {annotation.role ?? 'Note'}
+          </span>
+        )}
       </strong>
       <small>
         {node.kind === 'folder'

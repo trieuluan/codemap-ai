@@ -3,6 +3,11 @@ import type { FileNode } from '../../shared/model';
 import { send } from '../bridge';
 
 interface GraphToolbarProps {
+  canBack: boolean;
+  canForward: boolean;
+  onBack: () => void;
+  onForward: () => void;
+  onLibrary: () => void;
   workspaceName: string;
   query: string;
   matches: FileNode[];
@@ -20,6 +25,11 @@ interface GraphToolbarProps {
 }
 
 export function GraphToolbar({
+  canBack,
+  canForward,
+  onBack,
+  onForward,
+  onLibrary,
   workspaceName,
   query,
   matches,
@@ -37,6 +47,13 @@ export function GraphToolbar({
 }: GraphToolbarProps) {
   return (
     <header>
+      <button aria-label="Navigate back" disabled={!canBack} onClick={onBack}>
+        ←
+      </button>
+      <button aria-label="Navigate forward" disabled={!canForward} onClick={onForward}>
+        →
+      </button>
+      <button onClick={onLibrary}>Saved Views</button>
       <div className="brand">
         <strong>CodeMap</strong>
         <span>{workspaceName}</span>

@@ -25,6 +25,7 @@ export function useCanvasNavigation(
     [nodes, flow],
   );
   const renderedNodes = useNodes();
+  const restoredViewport = useRef<GraphViewState['viewport']>(undefined);
   const needsViewport = useRef(true);
   const fitMembers = useRef<string[] | undefined>(undefined);
   const pendingCenter = useRef<string | undefined>(undefined);
@@ -44,7 +45,11 @@ export function useCanvasNavigation(
     ) {
       return;
     }
-    if (fitMembers.current?.every((id) => flow.getNode(id))) {
+    if (restoredViewport.current) {
+      void flow.setViewport(restoredViewport.current);
+      restoredViewport.current = undefined;
+      needsViewport.current = false;
+    } else if (fitMembers.current?.every((id) => flow.getNode(id))) {
       const members = fitMembers.current;
       fitMembers.current = undefined;
       needsViewport.current = false;
@@ -76,6 +81,7 @@ export function useCanvasNavigation(
   }, [nodes, renderedNodes, flow, inspecting, canvasKey, fitCanvas]);
   return {
     flow,
+    restoredViewport,
     canvasRef,
     fitCanvas,
     needsViewport,
