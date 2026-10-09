@@ -1,0 +1,175 @@
+import * as vscode from 'vscode';
+import { randomBytes } from 'node:crypto';
+import { GraphController } from './controller';
+import { ViewStore, type StateStorage } from './view-store';
+import { defaultView, reconcileView } from './shared/view';
+import type { GraphSnapshot, HostMessage, ImportSite } from './shared/model';
+
+export class CodeMapPanel implements vscode.Disposable {
+  private panel: vscode.WebviewPanel;
+  private snapshot?: GraphSnapshot;
+  private root?: vscode.WorkspaceFolder;
+  private controller?: GraphController;
+  private store: ViewStore;
+  private choosing = false;
+  private disposed = false;
+  private ready = false;
+  private disposables: vscode.Disposable[] = [];
+
+
+  constructor(extensionUri: vscode.Uri, private onDispose: () => void,
+    private storage?: StateStorage, private log: (message: string) => void = () => {}) {
+    this.store = new ViewStore(storage, error => log(`View storage: ${String(error)}`));
+    this.panel = vscode.window.createWebviewPanel('codemap', 'CodeMap', vscode.ViewColumn.Active, {
+      enableScripts: true, retainContextWhenHidden: true,
+      localResourceRoots: [vscode.Uri.joinPath(extensionUri, 'dist')],
+    });
+    const webview = this.panel.webview;
+    const script = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, 'dist', 'webview.js'));
+    const css = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, 'dist', 'webview.css'));
+    const nonce = randomBytes(16).toString('hex');
+    webview.html = `<!doctype html><html lang="en"><head><meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-${nonce}'; style-src ${webview.cspSource} 'unsafe-inline'; img-src ${webview.cspSource} data:; font-src ${webview.cspSource};">
+      <link rel="stylesheet" href="${css}"><title>CodeMap</title></head>
+      <body><div id="root"></div><script nonce="${nonce}" src="${script}"></script></body></html>`;
+    this.disposables.push(this.panel.onDidDispose(() => this.dispose()));
+    this.disposables.push(webview.onDidReceiveMessage(message => { void this.handleMessage(message); }));
+    this.disposables.push(vscode.workspace.onDidChangeWorkspaceFolders(() => {
+      if (this.root && !vscode.workspace.workspaceFolders?.some(root => root.uri.toString() === this.root?.uri.toString())) {
+        this.controller?.dispose(); this.controller = undefined;
+        this.root = undefined; this.snapshot = undefined;
+        this.post({ type: 'empty', message: 'Workspace changed.', openFolder: !vscode.workspace.workspaceFolders?.length });
+        void this.refresh();
+      }
+    }));
+  }
+  reveal() { this.panel.reveal(); }
+  private post(message: HostMessage) { if (!this.disposed) { void this.panel.webview.postMessage(message); } }
+  async handleMessage(message: unknown) {
+    if (!message || typeof message !== 'object' || !('type' in message)) { return; }
+    try {
+      switch (message.type) {
+        case 'ready':
+          if (!this.ready) { this.ready = true; await this.refresh(); }
+          break;
+        case 'refresh': await this.refresh(); break;
+        case 'cancel':
+          this.controller?.scheduler.cancel();
+          if (this.root) {
+            const state = { ...this.store.get(this.root.uri.toString()), autoUpdate: false };
+            this.store.save(this.root.uri.toString(), state);
+            this.post({ type: 'viewState', rootId: this.root.uri.toString(), state });
+          }
+          break;
+        case 'changeFolder': await this.refresh(true); break;
+        case 'saveView':
+          if ('rootId' in message && message.rootId === this.root?.uri.toString() && 'state' in message) {
+            this.store.save(message.rootId as string, message.state);
+          }
+          break;
+        case 'autoUpdate':
+          if ('enabled' in message && typeof message.enabled === 'boolean' && this.root) {
+            this.store.save(this.root.uri.toString(), { ...this.store.get(this.root.uri.toString()), autoUpdate: message.enabled });
+            this.controller?.scheduler.setAutoUpdate(message.enabled);
+          }
+          break;
+        case 'resetView':
+          if (this.root) {
+            const state = defaultView();
+            this.store.save(this.root.uri.toString(), state);
+            this.controller?.scheduler.setAutoUpdate(true);
+            this.post({ type: 'viewState', rootId: this.root.uri.toString(), state });
+          }
+          break;
+        case 'layoutStats':
+          if ('milliseconds' in message && typeof message.milliseconds === 'number' && Number.isFinite(message.milliseconds) && 'nodes' in message && typeof message.nodes === 'number') {
+            this.log(`Layout ${message.nodes} nodes: ${message.milliseconds.toFixed(1)} ms`);
+          }
+          break;
+        case 'openFolder': await vscode.commands.executeCommand('vscode.openFolder'); break;
+        case 'openFile':
+        case 'openImport': {
+          if (!('nodeId' in message) || typeof message.nodeId !== 'string') { return; }
+          const node = this.snapshot?.nodes.find(item => item.id === message.nodeId);
+          if (!node) { return; }
+          let site: ImportSite | undefined;
+          if (message.type === 'openImport') {
+            if (!('siteId' in message) || typeof message.siteId !== 'string') { return; }
+            site = this.snapshot?.edges.filter(edge => edge.source === node.id).flatMap(edge => edge.sites)
+              .concat(node.outside.map(item => item.site)).find(item => item.id === message.siteId);
+            if (!site) { return; }
+          }
+          const document = await vscode.workspace.openTextDocument(vscode.Uri.parse(node.id));
+          const position = site ? document.validatePosition(new vscode.Position(site.line, site.character)) : undefined;
+          await vscode.window.showTextDocument(document, { viewColumn: vscode.ViewColumn.Beside,
+            selection: position ? new vscode.Range(position, position) : undefined, preview: true });
+          break;
+        }
+      }
+    } catch (error) { this.post({ type: 'error', message: String(error) }); }
+  }
+  private async refresh(changeRoot = false) {
+    if (this.disposed || this.choosing) { return; }
+    if (this.controller && !changeRoot) { await this.controller.refresh(); return; }
+    const roots = vscode.workspace.workspaceFolders ?? [];
+    if (!roots.length) {
+      this.post({ type: 'empty', message: 'Open a folder to map its source code.', openFolder: true });
+      return;
+    }
+    this.choosing = true;
+    try {
+      const previousRoot = !changeRoot ? this.storage?.get<string>('codemap.lastRoot') : undefined;
+      const remembered = roots.find(root => root.uri.toString() === previousRoot);
+      const root = roots.length === 1 ? roots[0] : remembered ?? await vscode.window.showQuickPick(
+        roots.map(folder => ({ label: folder.name, description: folder.uri.fsPath, folder })),
+        { placeHolder: 'Choose the workspace folder to map' }).then(item => item?.folder);
+      if (!root || this.disposed) { return; }
+      if (root.uri.scheme !== 'file') {
+        this.post({ type: 'error', message: 'CodeMap supports filesystem workspaces only.' }); return;
+      }
+      if (root.uri.toString() === this.root?.uri.toString() && this.controller) { await this.controller.refresh(); return; }
+      this.controller?.dispose();
+      this.root = root; this.snapshot = undefined;
+      const rootId = root.uri.toString();
+      await this.store.flush();
+      await this.storage?.update('codemap.lastRoot', rootId);
+      this.post({ type: 'empty', message: 'Scanning selected workspace…', openFolder: false });
+      this.post({ type: 'viewState', rootId, state: this.store.get(rootId) });
+      this.controller = new GraphController(root, snapshot => {
+        if (this.disposed || this.root?.uri.toString() !== rootId) { return; }
+        this.snapshot = snapshot;
+        const state = reconcileView(this.store.get(rootId), snapshot);
+        this.store.save(rootId, state);
+        this.post({ type: 'snapshot', snapshot, viewState: state });
+      }, (state, autoUpdate, error) => {
+        this.post({ type: 'sync', state, autoUpdate });
+        this.post({ type: 'status', scanning: state === 'updating', message: state === 'updating' ? 'Updating source map…' : '' });
+        if (error) { this.post({ type: 'error', message: `Update failed: ${String(error)}` }); }
+      }, this.log);
+      this.controller.scheduler.setAutoUpdate(this.store.get(rootId).autoUpdate);
+      await this.controller.refresh();
+    } finally { this.choosing = false; }
+  }
+  dispose() {
+    if (this.disposed) { return; }
+    this.disposed = true;
+    this.controller?.dispose();
+    void this.store.flush();
+    for (const disposable of this.disposables) { disposable.dispose(); }
+    this.panel.dispose();
+    this.onDispose();
+  }
+}
+export function activate(context: vscode.ExtensionContext) {
+  let panel: CodeMapPanel | undefined;
+  const output = vscode.window.createOutputChannel('CodeMap');
+  context.subscriptions.push(output);
+  context.subscriptions.push(vscode.commands.registerCommand('codemap-ai.openGraph', () => {
+    if (panel) { panel.reveal(); } else {
+      panel = new CodeMapPanel(context.extensionUri, () => { panel = undefined; }, context.workspaceState, message => output.appendLine(message));
+    }
+  }));
+  context.subscriptions.push({ dispose: () => panel?.dispose() });
+}
+export function deactivate() {}

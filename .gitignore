@@ -1,0 +1,21 @@
+# Dependencies and package-manager caches
+node_modules/
+.pnpm-store/
+
+# Generated bundles, compiled tests and VS Code test downloads
+dist/
+out/
+.vscode-test/
+coverage/
+*.tsbuildinfo
+*.vsix
+
+# Local logs, environment secrets and OS/editor files
+*.log
+.env
+.env.*
+!.env.example
+.DS_Store
+Thumbs.db
+*.swp
+*.swo

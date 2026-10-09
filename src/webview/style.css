@@ -1,0 +1,44 @@
+:root { color-scheme: light dark; font-family: var(--vscode-font-family, sans-serif); font-size: var(--vscode-font-size, 13px); color: var(--vscode-foreground); background: var(--vscode-editor-background); }
+* { box-sizing: border-box; }
+body { margin: 0; padding: 0; }
+button, input { font: inherit; }
+button { color: var(--vscode-button-secondaryForeground); background: var(--vscode-button-secondaryBackground); border: 1px solid transparent; border-radius: 4px; padding: 6px 10px; cursor: pointer; }
+button:hover { background: var(--vscode-button-secondaryHoverBackground); }
+button:disabled { opacity: .45; cursor: default; }
+button:focus-visible, input:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 2px; }
+input { width: 100%; color: var(--vscode-input-foreground); background: var(--vscode-input-background); border: 1px solid var(--vscode-input-border, transparent); border-radius: 4px; padding: 7px 10px; }
+.app { height: 100vh; display: flex; flex-direction: column; }
+header { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 12px 16px; border-bottom: 1px solid var(--vscode-panel-border); }
+.brand { display: flex; gap: 12px; align-items: center; margin-right: 12px; }
+.brand strong { font-size: 17px; }
+.brand span, .muted, footer, small { color: var(--vscode-descriptionForeground); }
+.search { position: relative; flex: 1; min-width: 150px; max-width: 420px; }
+.results { position: absolute; z-index: 20; top: 36px; width: 100%; max-height: 300px; overflow: auto; background: var(--vscode-editorWidget-background); border: 1px solid var(--vscode-panel-border); box-shadow: 0 4px 12px #0003; }
+.results button, .results span { display: block; text-align: left; width: 100%; padding: 8px; overflow-wrap: anywhere; }
+.content { flex: 1; min-height: 0; display: flex; }
+main { flex: 1; position: relative; min-width: 0; }
+aside { width: 310px; flex-shrink: 0; padding: 18px; overflow: auto; border-left: 1px solid var(--vscode-panel-border); background: var(--vscode-sideBar-background); }
+h2 { font-size: 16px; margin: 0 0 10px; } h3 { font-size: 13px; margin: 24px 0 10px; } h3 span { font-weight: normal; color: var(--vscode-descriptionForeground); }
+p { line-height: 1.6; } .path { overflow-wrap: anywhere; display: block; } .badge { display: inline-block; font-size: 11px; padding: 2px 6px; border-radius: 4px; background: var(--vscode-badge-background); color: var(--vscode-badge-foreground); }
+.unresolved { color: var(--vscode-editorWarning-foreground); background: transparent; }
+.dependency { margin-bottom: 12px; padding-bottom: 10px; border-bottom: 1px solid var(--vscode-panel-border); }
+.link, .site { color: var(--vscode-textLink-foreground); background: transparent; display: block; text-align: left; overflow-wrap: anywhere; padding: 4px 0; max-width: 100%; }
+.site { font-size: 11px; } .primary { background: var(--vscode-button-background); color: var(--vscode-button-foreground); } .primary:hover { background: var(--vscode-button-hoverBackground); }
+.empty { position: absolute; left: 50%; top: 45%; transform: translate(-50%, -50%); text-align: center; width: min(85%, 460px); pointer-events: none; } .empty button { pointer-events: auto; }
+.error { padding: 8px 16px; background: var(--vscode-inputValidation-errorBackground); color: var(--vscode-errorForeground); display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+footer { display: flex; justify-content: space-between; gap: 10px; padding: 6px 12px; border-top: 1px solid var(--vscode-panel-border); font-size: 11px; } footer button { margin-left: 10px; padding: 2px 8px; }
+.warnings { color: var(--vscode-editorWarning-foreground); overflow-wrap: anywhere; } .legend { border-left: 2px solid var(--vscode-focusBorder); padding-left: 10px; }
+.react-flow { --xy-background-color: var(--vscode-editor-background); --xy-node-background-color: var(--vscode-editorWidget-background); --xy-node-color: var(--vscode-foreground); --xy-node-border: 1px solid var(--vscode-panel-border); --xy-node-border-selected: 1px solid var(--vscode-focusBorder); --xy-edge-stroke: var(--vscode-descriptionForeground); --xy-edge-stroke-selected: var(--vscode-focusBorder); --xy-controls-button-background-color: var(--vscode-button-secondaryBackground); --xy-controls-button-color: var(--vscode-button-secondaryForeground); --xy-controls-button-background-color-hover: var(--vscode-button-secondaryHoverBackground); --xy-controls-button-border-color: var(--vscode-panel-border); --xy-background-pattern-dots-color: var(--vscode-panel-border); }
+.react-flow__node { border-radius: 7px; padding: 12px; text-align: left; } .file-label { overflow: hidden; } .file-label strong, .file-label small { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; } .file-label small { margin-top: 5px; font-size: 10px; }
+.react-flow__node.search-match { box-shadow: 0 0 0 2px var(--vscode-editorWarning-foreground); }
+.related-edge .react-flow__edge-path { stroke: var(--vscode-focusBorder); stroke-width: 2; }
+@media (max-width: 750px) { aside { width: 240px; padding: 12px; } footer { flex-wrap: wrap; } }
+.view-options { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; padding: 10px 16px; border-bottom: 1px solid var(--vscode-panel-border); background: var(--vscode-sideBar-background); }
+.view-options label { display: flex; align-items: center; gap: 6px; }
+.view-options input[type=checkbox] { width: auto; accent-color: var(--vscode-focusBorder); }
+select { font: inherit; background: var(--vscode-dropdown-background, var(--vscode-input-background)); color: var(--vscode-dropdown-foreground, var(--vscode-foreground)); border: 1px solid var(--vscode-panel-border); padding: 4px; border-radius: 4px; max-width: 220px; }
+.folder-node { border-style: dashed; border-color: var(--vscode-focusBorder); }
+.sync.out-of-date { color: var(--vscode-editorWarning-foreground); }
+.sync.error { color: var(--vscode-errorForeground); background: transparent; display: inline; padding: 0; }
+.react-flow__edge-text { fill: var(--vscode-foreground); }
+.react-flow__edge-textbg { fill: var(--vscode-editor-background); }
