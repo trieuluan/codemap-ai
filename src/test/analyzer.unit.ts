@@ -475,3 +475,81 @@ test('incremental symbol linking updates untouched importers after a declaration
     },
   );
 });
+
+test('barrel routes retain every real file hop through stars and imported local aliases', async () => {
+  await fixture(
+    {
+      'source.ts': 'export default class Widget {}',
+      'local.ts': `import Widget from './source'; export { Widget as Item };`,
+      'index.ts': `export * from './local';`,
+      'consumer.ts': `import { Item as Card } from './index';`,
+      'ambiguous.ts': `export * from './left'; export * from './right';`,
+      'left.ts': 'export const clash = 1;',
+      'right.ts': 'export const clash = 2;',
+      'unknown.ts': `import { clash } from './ambiguous'; import { missing } from './cycle-a';`,
+      'cycle-a.ts': `export * from './cycle-b';`,
+      'cycle-b.ts': `export * from './cycle-a';`,
+    },
+    async (root, files) => {
+      const graph = await analyze(options(root, files));
+      const byId = new Map(graph.nodes.map((node) => [node.id, node.name]));
+      const symbol = graph.edges.find((edge) => edge.source.endsWith('/consumer.ts'))!.sites[0]
+        .symbols![0];
+      assert.deepEqual(
+        symbol.resolutionPath?.map((id) => byId.get(id)),
+        ['consumer.ts', 'index.ts', 'local.ts', 'source.ts'],
+      );
+      for (const [index, id] of symbol.resolutionPath!.entries()) {
+        if (index) {
+          assert.ok(
+            graph.edges.some(
+              (edge) => edge.source === symbol.resolutionPath![index - 1] && edge.target === id,
+            ),
+          );
+        }
+      }
+      for (const edge of graph.edges.filter((edge) => edge.source.endsWith('/unknown.ts'))) {
+        assert.equal(edge.sites[0].symbols![0].resolutionPath, undefined);
+      }
+    },
+  );
+});
+
+test('symbol impact excludes consumers of unrelated barrel exports and includes known routes', async () => {
+  const { analyzeImpact, graphForPath } = await import('../shared/investigation.js');
+  await fixture(
+    {
+      'source.ts': 'export class Selected {} export class Other {}',
+      'barrel.ts': `export { Selected, Other } from './source';`,
+      'consumer.ts': `import { Selected as Card } from './barrel'; import './outer';`,
+      'unrelated.ts': `import { Other } from './barrel';`,
+      'outer.ts': `import './consumer';`,
+    },
+    async (root, files) => {
+      const graph = await analyze(options(root, files));
+      const source = graph.nodes.find((node) => node.name === 'source.ts')!;
+      const symbol = source.declarations!.find((symbol) => symbol.name === 'Selected')!;
+      const result = analyzeImpact(graph, { nodeId: source.id, symbolId: symbol.id });
+      const names = new Map(graph.nodes.map((node) => [node.id, node.name]));
+      assert.deepEqual(
+        new Set(result.map((entry) => names.get(entry.nodeId))),
+        new Set(['barrel.ts', 'consumer.ts', 'outer.ts']),
+      );
+      const outer = result.find((entry) => names.get(entry.nodeId) === 'outer.ts')!;
+      assert.deepEqual(
+        outer.path.map((id) => names.get(id)),
+        ['outer.ts', 'consumer.ts', 'barrel.ts', 'source.ts'],
+      );
+      assert.equal(outer.direct, false);
+      for (const entry of result) {
+        assert.equal(graphForPath(graph, entry.path).edges.length, entry.path.length - 1);
+      }
+      assert.ok(
+        analyzeImpact(graph, { nodeId: source.id }).some(
+          (entry) => names.get(entry.nodeId) === 'unrelated.ts',
+        ),
+      );
+      assert.deepEqual(analyzeImpact(graph, { nodeId: source.id, symbolId: 'missing' }), []);
+    },
+  );
+});

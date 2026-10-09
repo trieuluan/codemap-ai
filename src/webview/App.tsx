@@ -6,8 +6,6 @@ import {
   MarkerType,
   Position,
   useNodesState,
-  useReactFlow,
-  useNodesInitialized,
   type Node,
   type Edge,
 } from '@xyflow/react';
@@ -24,10 +22,14 @@ import {
 import { send } from './bridge';
 import { width, height, layout } from './graph-layout';
 import { useHostMessages } from './hooks/useHostMessages';
+import { useCanvasNavigation } from './hooks/useCanvasNavigation';
 import { FileNodeLabel } from './components/FileNodeLabel';
 import { DetailsPanel } from './components/DetailsPanel';
 import { ViewOptions } from './components/ViewOptions';
 import { GraphToolbar } from './components/GraphToolbar';
+import { InvestigationPanel } from './components/InvestigationPanel';
+import { ShowPathContext } from './components/ImportRoute';
+import { graphForPath, withSymbols, type ImpactTarget } from '../shared/investigation';
 
 const syncLabels: Record<SyncState, string> = {
   'up-to-date': 'Up to date',
@@ -52,13 +54,48 @@ export function App() {
   const [contextId, setContextId] = useState<string>();
   const [peekGroups, setPeekGroups] = useState<string[]>([]);
   const [edgeSelection, setEdgeSelection] = useState<string>();
+  const [activeFileId, setActiveFileId] = useState<string>();
+  const [revealRequest, setRevealRequest] = useState<{ nodeId: string }>();
+  const [tracePath, setTracePath] = useState<string[]>();
+  const [symbolsFileId, setSymbolsFileId] = useState<string>();
+  const [selectedSymbolId, setSelectedSymbolId] = useState<string>();
+  const [impactTarget, setImpactTarget] = useState<ImpactTarget>();
+  const inspectionPositions = useRef<GraphViewState['positions']>({});
+  const inspecting = !!tracePath || !!symbolsFileId;
+  const canvasKey = tracePath
+    ? `path:${JSON.stringify(tracePath)}`
+    : symbolsFileId
+      ? `symbols:${symbolsFileId}`
+      : layoutKey(view);
+  const clearInspection = () => {
+    setTracePath(undefined);
+    setSymbolsFileId(undefined);
+    setSelectedSymbolId(undefined);
+    inspectionPositions.current = {};
+    needsViewport.current = true;
+    readyToSaveViewport.current = false;
+  };
+  const showPath = (path: string[]) => {
+    pendingCenter.current = undefined;
+    fitMembers.current = undefined;
+    setTracePath(path);
+    setSymbolsFileId(undefined);
+    setSelectedSymbolId(undefined);
+    inspectionPositions.current = {};
+    arrangePeek.current = true;
+    needsViewport.current = true;
+    readyToSaveViewport.current = false;
+  };
   const arrangePeek = useRef(false);
-  const flow = useReactFlow();
-  const initialized = useNodesInitialized();
-  const needsViewport = useRef(true);
-  const fitMembers = useRef<string[] | undefined>(undefined);
-  const pendingCenter = useRef<string | undefined>(undefined);
-  const readyToSaveViewport = useRef(false);
+  const {
+    flow,
+    canvasRef,
+    fitCanvas,
+    needsViewport,
+    fitMembers,
+    pendingCenter,
+    readyToSaveViewport,
+  } = useCanvasNavigation(nodes, canvasKey, viewRef, inspecting);
   const applyView = useCallback((next: GraphViewState, save = true) => {
     viewRef.current = next;
     setView(next);
@@ -69,6 +106,7 @@ export function App() {
   const updateView = (patch: Partial<GraphViewState>) =>
     applyView({ ...viewRef.current, ...patch });
   const changeLayout = (mode: GraphViewState['mode'], depth = viewRef.current.depth) => {
+    clearInspection();
     setGroupSelection(undefined);
     setPeekGroups([]);
     setEdgeSelection(undefined);
@@ -76,14 +114,31 @@ export function App() {
     readyToSaveViewport.current = false;
     fitMembers.current = undefined;
     pendingCenter.current = undefined;
-    applyView(switchLayout({ ...viewRef.current, viewport: flow.getViewport() }, mode, depth));
+    applyView(
+      switchLayout(
+        {
+          ...viewRef.current,
+          viewport: inspecting ? viewRef.current.viewport : flow.getViewport(),
+        },
+        mode,
+        depth,
+      ),
+    );
   };
   useHostMessages((message: HostMessage) => {
     switch (message.type) {
+      case 'activeFile':
+        setActiveFileId(message.nodeId);
+        if (message.reveal && message.nodeId) {
+          setRevealRequest({ nodeId: message.nodeId });
+        }
+        break;
       case 'snapshot': {
         const next = message.snapshot;
         const sameRoot = rootId.current === next.root.id;
         if (!sameRoot) {
+          clearInspection();
+          setImpactTarget(undefined);
           setQuery('');
           setContextId(undefined);
           setPeekGroups([]);
@@ -107,6 +162,9 @@ export function App() {
         break;
       }
       case 'viewState':
+        setRevealRequest(undefined);
+        clearInspection();
+        setImpactTarget(undefined);
         rootId.current = message.rootId;
         applyView(readView(message.state), false);
         setContextId(undefined);
@@ -128,6 +186,10 @@ export function App() {
         }
         break;
       case 'empty':
+        setRevealRequest(undefined);
+        clearInspection();
+        setImpactTarget(undefined);
+        setActiveFileId(undefined);
         rootId.current = undefined;
         needsViewport.current = true;
         readyToSaveViewport.current = false;
@@ -146,20 +208,48 @@ export function App() {
     [snapshot],
   );
   const contextFile = snapshot?.nodes.find((node) => node.id === (contextId ?? view.selected));
-  const display = useMemo(
-    () =>
-      snapshot
-        ? projectGraph(snapshot, view, { fileId: contextFile?.id, groups: peekGroups })
-        : { nodes: [], edges: [], visibleFiles: 0 },
-    [snapshot, view, contextFile?.id, peekGroups],
-  );
+  const display = useMemo(() => {
+    if (!snapshot) {
+      return { nodes: [], edges: [], visibleFiles: 0 };
+    }
+    const source = tracePath
+      ? graphForPath(snapshot, tracePath)
+      : symbolsFileId
+        ? {
+            ...snapshot,
+            nodes: snapshot.nodes.filter((node) => node.id === symbolsFileId),
+            edges: [],
+          }
+        : snapshot;
+    const state = inspecting
+      ? {
+          ...view,
+          mode: 'files' as const,
+          folder: '',
+          hideTests: false,
+          hideIsolated: false,
+          focus: 0 as const,
+        }
+      : view;
+    return withSymbols(
+      projectGraph(source, state, { fileId: contextFile?.id, groups: peekGroups }),
+      filesById.get(symbolsFileId ?? ''),
+    );
+  }, [snapshot, view, contextFile?.id, peekGroups, tracePath, symbolsFileId, filesById]);
   const baseEdges: Edge[] = useMemo(
     () =>
       display.edges.map((edge) => ({
         ...edge,
-        label: `${edge.count} ${edge.count === 1 ? 'file' : 'files'}${edge.symbolCount ? ` · ${edge.symbolCount} ${edge.symbolCount === 1 ? 'symbol' : 'symbols'}` : ''}`,
-        ariaLabel: `Imports from ${display.nodes.find((node) => node.id === edge.source)?.path} to ${display.nodes.find((node) => node.id === edge.target)?.path}`,
-        markerEnd: { type: MarkerType.ArrowClosed },
+        label:
+          edge.relation === 'declaration'
+            ? 'declares'
+            : `${edge.count} ${edge.count === 1 ? 'file' : 'files'}${edge.symbolCount ? ` · ${edge.symbolCount} ${edge.symbolCount === 1 ? 'symbol' : 'symbols'}` : ''}`,
+        ariaLabel:
+          edge.relation === 'declaration'
+            ? `Declares ${display.nodes.find((node) => node.id === edge.target)?.label}`
+            : `Imports from ${display.nodes.find((node) => node.id === edge.source)?.path} to ${display.nodes.find((node) => node.id === edge.target)?.path}`,
+        markerEnd: edge.relation === 'declaration' ? undefined : { type: MarkerType.ArrowClosed },
+        style: edge.relation === 'declaration' ? { strokeDasharray: '5 5' } : undefined,
         type: 'default',
       })),
     [display],
@@ -176,16 +266,19 @@ export function App() {
   };
   useEffect(() => {
     const current = viewRef.current;
+    const positions = inspecting
+      ? { ...current.positions, ...inspectionPositions.current }
+      : current.positions;
     const initial: Node[] = display.nodes.map((node) => ({
       id: node.id,
-      position: current.positions[node.id] ?? { x: 0, y: 0 },
+      position: positions[node.id] ?? { x: 0, y: 0 },
       initialWidth: width,
       initialHeight: node.kind === 'folder' ? 240 : height,
-      sourcePosition: Position.Right,
-      targetPosition: Position.Left,
+      sourcePosition: tracePath ? Position.Bottom : Position.Right,
+      targetPosition: tracePath ? Position.Top : Position.Left,
       style: { width, height: node.kind === 'folder' ? 240 : height },
       data: {
-        layoutKey: layoutKey(current),
+        layoutKey: canvasKey,
         label: (
           <FileNodeLabel
             node={node}
@@ -197,26 +290,33 @@ export function App() {
         ),
       },
       ariaLabel: node.path,
-      className: node.kind === 'folder' ? 'folder-node' : '',
+      className:
+        node.kind === 'folder' ? 'folder-node' : node.kind === 'symbol' ? 'symbol-node' : '',
     }));
     if (!initial.length) {
       setNodes([]);
       return;
     }
-    const savedPositions = Object.values(current.positions);
+    const savedPositions = Object.values(positions);
     let next = initial;
     const rearrange = arrangePeek.current;
     arrangePeek.current = false;
-    if (rearrange || !initial.some((node) => current.positions[node.id])) {
-      next = layout(initial, baseEdges);
+    if (rearrange || !initial.some((node) => positions[node.id])) {
+      next = layout(initial, baseEdges, tracePath ? 'TB' : 'LR');
     } else {
       const right = Math.max(...savedPositions.map((position) => position.x)) + width + 90;
       let index = 0;
       next = initial.map((node) =>
-        current.positions[node.id] ? node : { ...node, position: { x: right, y: index++ * 268 } },
+        positions[node.id] ? node : { ...node, position: { x: right, y: index++ * 268 } },
       );
     }
     setNodes(next);
+    if (inspecting) {
+      inspectionPositions.current = Object.fromEntries(
+        next.map((node) => [node.id, node.position]),
+      );
+      return;
+    }
     const missing = next.filter((node) => rearrange || !current.positions[node.id]);
     if (missing.length) {
       applyView({
@@ -227,50 +327,55 @@ export function App() {
         },
       });
     }
-  }, [display, baseEdges, setNodes, applyView]);
-  useEffect(() => {
-    if (
-      !initialized ||
-      !nodes.length ||
-      nodes.some((node) => node.data.layoutKey !== layoutKey(viewRef.current))
-    ) {
-      return;
-    }
-    if (fitMembers.current?.every((id) => flow.getNode(id))) {
-      const members = fitMembers.current;
-      fitMembers.current = undefined;
-      void flow.fitView({ nodes: members.map((id) => ({ id })), padding: 0.2, duration: 250 });
-    } else if (pendingCenter.current) {
-      const node = flow.getNode(pendingCenter.current);
-      if (node) {
-        pendingCenter.current = undefined;
-        void flow.setCenter(node.position.x + width / 2, node.position.y + height / 2, {
-          zoom: 1,
-          duration: 250,
-        });
-      }
-    } else if (needsViewport.current) {
-      needsViewport.current = false;
-      const viewport = viewRef.current.viewport;
-      if (viewport) {
-        void flow.setViewport(viewport);
-      } else {
-        void flow.fitView({ padding: 0.15 });
-      }
-    }
-    readyToSaveViewport.current = true;
-  }, [initialized, nodes, flow]);
+  }, [display, baseEdges, setNodes, applyView, inspecting, canvasKey]);
   const selectFile = (id: string) => {
     if (!snapshot) {
       return;
     }
+    clearInspection();
+    setImpactTarget(undefined);
     setGroupSelection(undefined);
+    needsViewport.current = false;
     pendingCenter.current = id;
     setContextId(id);
     setPeekGroups([]);
     setEdgeSelection(undefined);
     applyView(revealFile(viewRef.current, snapshot, id));
   };
+  useEffect(() => {
+    const id =
+      revealRequest?.nodeId ?? (view.followEditor && !inspecting ? activeFileId : undefined);
+    if (id && snapshot?.nodes.some((node) => node.id === id)) {
+      selectFile(id);
+      setRevealRequest(undefined);
+    }
+  }, [activeFileId, view.followEditor, snapshot?.root.id, revealRequest]);
+  useEffect(() => {
+    if (!snapshot) {
+      return;
+    }
+    if (symbolsFileId && !snapshot.nodes.some((node) => node.id === symbolsFileId)) {
+      clearInspection();
+    }
+    if (
+      impactTarget &&
+      !snapshot.nodes.some(
+        (node) =>
+          node.id === impactTarget.nodeId &&
+          (!impactTarget.symbolId ||
+            node.declarations?.some((symbol) => symbol.id === impactTarget.symbolId)),
+      )
+    ) {
+      setImpactTarget(undefined);
+    }
+    if (
+      tracePath &&
+      graphForPath(snapshot, tracePath).edges.length <
+        new Set(tracePath.slice(1).map((id, index) => JSON.stringify([tracePath[index], id]))).size
+    ) {
+      clearInspection();
+    }
+  }, [snapshot]);
   const matches = useMemo(
     () =>
       snapshot?.nodes.filter(
@@ -278,12 +383,24 @@ export function App() {
       ) ?? [],
     [snapshot, query],
   );
-  const matchingIds = new Set(matches.map((node) => node.id));
-  const decoratedNodes = nodes.map((node) => ({
-    ...node,
-    selected: node.id === (groupSelection ?? view.selected),
-    className: `${node.className ?? ''} ${display.nodes.find((item) => item.id === node.id)?.members.some((id) => matchingIds.has(id)) ? 'search-match' : ''}`,
-  }));
+  const matchingIds = useMemo(() => new Set(matches.map((node) => node.id)), [matches]);
+  const decoratedNodes = useMemo(
+    () =>
+      nodes.map((node) => ({
+        ...node,
+        selected: node.id === (selectedSymbolId ?? groupSelection ?? view.selected),
+        className: `${node.className ?? ''} ${display.nodes.find((item) => item.id === node.id)?.members.includes(activeFileId ?? '') ? 'active-editor-node' : ''} ${display.nodes.find((item) => item.id === node.id)?.members.some((id) => matchingIds.has(id)) ? 'search-match' : ''}`,
+      })),
+    [
+      nodes,
+      selectedSymbolId,
+      groupSelection,
+      view.selected,
+      display.nodes,
+      activeFileId,
+      matchingIds,
+    ],
+  );
   const selected = groupSelection ?? view.selected;
   const contextTarget = edgeSelection?.startsWith('context:') ? edgeSelection.slice(8) : undefined;
   const contextSource = display.nodes.find(
@@ -299,6 +416,7 @@ export function App() {
       className:
         picked || edge.source === selected || edge.target === selected ? 'related-edge' : '',
       style: {
+        ...edge.style,
         opacity: edgeSelection
           ? picked
             ? 1
@@ -368,167 +486,242 @@ export function App() {
     setGroupSelection(id);
   };
   const autoLayout = () => {
-    const arranged = layout(nodes, baseEdges);
+    const arranged = layout(nodes, baseEdges, tracePath ? 'TB' : 'LR');
     setNodes(arranged);
-    updateView({
-      positions: {
-        ...view.positions,
-        ...Object.fromEntries(arranged.map((node) => [node.id, node.position])),
-      },
-    });
+    if (inspecting) {
+      inspectionPositions.current = Object.fromEntries(
+        arranged.map((node) => [node.id, node.position]),
+      );
+    } else {
+      updateView({
+        positions: {
+          ...view.positions,
+          ...Object.fromEntries(arranged.map((node) => [node.id, node.position])),
+        },
+      });
+    }
     requestAnimationFrame(() =>
       requestAnimationFrame(() => {
-        void flow.fitView({ padding: 0.15, duration: 250 });
+        fitCanvas(arranged, 250);
       }),
     );
   };
   return (
-    <div className="app">
-      <GraphToolbar
-        workspaceName={snapshot?.root.name ?? 'Workspace'}
-        query={query}
-        matches={matches}
-        scanning={scanning}
-        optionsOpen={optionsOpen}
-        hasPeek={!!peekGroups.length}
-        hasNodes={!!nodes.length}
-        onQueryChange={setQuery}
-        onSelectFile={selectFile}
-        onToggleOptions={() => setOptionsOpen(!optionsOpen)}
-        onClosePeek={() => togglePeek()}
-        onFitView={() => {
-          void flow.fitView({ padding: 0.15, duration: 250 });
-        }}
-        onAutoLayout={autoLayout}
-      />
-      {optionsOpen && (
-        <ViewOptions
-          view={view}
-          folders={folders}
-          maxDepth={maxDepth}
-          hasSelectedFile={!!file}
+    <ShowPathContext.Provider value={showPath}>
+      <div className="app">
+        <GraphToolbar
+          workspaceName={snapshot?.root.name ?? 'Workspace'}
+          query={query}
+          matches={matches}
+          scanning={scanning}
+          optionsOpen={optionsOpen}
           hasPeek={!!peekGroups.length}
-          onChangeLayout={changeLayout}
-          onUpdateView={updateView}
-          onResetFilters={resetFilters}
-          onCollapseAll={() => {
-            setPeekGroups([]);
-            updateView({ expanded: [], focus: 0 });
-          }}
-        />
-      )}
-      {contextFile && view.mode === 'folders' && (
-        <div className="context-bar">
-          Import context: <strong>{contextFile.path}</strong>
-          <span>Click an arrow to inspect imports · Peek shows only related files</span>
-        </div>
-      )}
-      {error && (
-        <div className="error" role="alert">
-          {error}
-          <button onClick={() => setError('')}>Dismiss</button>
-        </div>
-      )}
-      <div className="content">
-        <main>
-          <ReactFlow
-            nodes={decoratedNodes}
-            edges={edges}
-            onNodesChange={onNodesChange}
-            onEdgeClick={(_event, edge) => setEdgeSelection(edge.id)}
-            onNodeClick={(_event, node) => {
-              setEdgeSelection(undefined);
-              if (node.id.startsWith('folder:')) {
-                setContextId(contextFile?.id);
-                setGroupSelection(node.id);
-                updateView({ selected: node.id, focus: 0 });
-              } else {
-                if (contextFile?.id !== node.id) {
-                  setPeekGroups([]);
-                }
-                setContextId(node.id);
-                setGroupSelection(undefined);
-                updateView({ selected: node.id });
-              }
-            }}
-            onPaneClick={() => {
-              setEdgeSelection(undefined);
-              setContextId(undefined);
-              setPeekGroups([]);
-              setGroupSelection(undefined);
-              updateView({ selected: undefined, focus: 0 });
-            }}
-            onNodeDoubleClick={(_event, node) =>
-              node.id.startsWith('folder:')
-                ? expand(node.id)
-                : send({ type: 'openFile', nodeId: node.id })
-            }
-            onNodeDragStop={(_event, node) =>
-              updateView({ positions: { ...viewRef.current.positions, [node.id]: node.position } })
-            }
-            onMoveEnd={(_event, viewport) => {
-              if (readyToSaveViewport.current) {
-                updateView({ viewport });
-              }
-            }}
-            nodesConnectable={false}
-            edgesReconnectable={false}
-            deleteKeyCode={null}
-            minZoom={0.05}
-            maxZoom={2}
-            onlyRenderVisibleElements
-          >
-            <Background />
-            <Controls showInteractive={false} />
-          </ReactFlow>
-          {!nodes.length && (
-            <div className="empty">
-              <h2>{scanning ? 'Mapping your source…' : 'Your code, connected'}</h2>
-              <p>
-                {scanning
-                  ? status
-                  : snapshot?.nodes.length
-                    ? 'No files match the current view.'
-                    : empty.message || 'Use Refresh to scan the workspace.'}
-              </p>
-              {empty.openFolder ? (
-                <button onClick={() => send({ type: 'openFolder' })}>Open Folder</button>
-              ) : (
-                !!snapshot?.nodes.length && <button onClick={resetFilters}>Reset Filters</button>
-              )}
-            </div>
-          )}
-        </main>
-        <DetailsPanel
-          snapshot={snapshot}
-          view={view}
-          file={file}
-          group={group}
-          contextFile={contextFile}
-          filesById={filesById}
-          inspectedEdge={inspectedEdge}
-          inspectedImports={inspectedImports}
-          outgoing={outgoing}
-          incoming={incoming}
-          onBack={() => setEdgeSelection(undefined)}
+          hasNodes={!!nodes.length}
+          hasActiveFile={!!activeFileId}
+          onQueryChange={setQuery}
           onSelectFile={selectFile}
-          onPeek={togglePeek}
-          onExpand={expand}
-          onCollapse={collapse}
+          onToggleOptions={() => setOptionsOpen(!optionsOpen)}
+          onClosePeek={() => togglePeek()}
+          onFitView={() => {
+            fitCanvas(undefined, 250);
+          }}
+          onAutoLayout={autoLayout}
         />
+        {optionsOpen && (
+          <ViewOptions
+            view={view}
+            folders={folders}
+            maxDepth={maxDepth}
+            hasSelectedFile={!!file}
+            hasPeek={!!peekGroups.length}
+            onChangeLayout={changeLayout}
+            onUpdateView={updateView}
+            onResetFilters={resetFilters}
+            onCollapseAll={() => {
+              setPeekGroups([]);
+              updateView({ expanded: [], focus: 0 });
+            }}
+          />
+        )}
+        {inspecting && (
+          <div className="context-bar">
+            <strong>{tracePath ? 'Import / impact path' : 'Symbol declarations'}</strong>
+            <span>Temporary canvas · saved layout is preserved</span>
+            <button onClick={clearInspection}>Back to graph</button>
+          </div>
+        )}
+        {contextFile && view.mode === 'folders' && !inspecting && (
+          <div className="context-bar">
+            Import context: <strong>{contextFile.path}</strong>
+            <span>Click an arrow to inspect imports · Peek shows only related files</span>
+          </div>
+        )}
+        {error && (
+          <div className="error" role="alert">
+            {error}
+            <button onClick={() => setError('')}>Dismiss</button>
+          </div>
+        )}
+        <div className="content">
+          <main ref={canvasRef}>
+            <ReactFlow
+              nodes={decoratedNodes}
+              edges={edges}
+              onNodesChange={onNodesChange}
+              onEdgeClick={(_event, edge) => {
+                if (!display.edges.find((item) => item.id === edge.id)?.relation) {
+                  setEdgeSelection(edge.id);
+                }
+              }}
+              onNodeClick={(_event, node) => {
+                const symbol = display.nodes.find(
+                  (item) => item.id === node.id && item.kind === 'symbol',
+                );
+                if (symbol?.ownerId && symbol.symbolId) {
+                  setSelectedSymbolId(node.id);
+                  send({ type: 'openSymbol', nodeId: symbol.ownerId, symbolId: symbol.symbolId });
+                  return;
+                }
+                setSelectedSymbolId(undefined);
+                setImpactTarget(undefined);
+                setEdgeSelection(undefined);
+                if (node.id.startsWith('folder:')) {
+                  setContextId(contextFile?.id);
+                  setGroupSelection(node.id);
+                  updateView({ selected: node.id, focus: 0 });
+                } else {
+                  if (contextFile?.id !== node.id) {
+                    setPeekGroups([]);
+                  }
+                  setContextId(node.id);
+                  setGroupSelection(undefined);
+                  updateView({ selected: node.id });
+                }
+              }}
+              onPaneClick={() => {
+                if (inspecting) {
+                  setSelectedSymbolId(undefined);
+                  setEdgeSelection(undefined);
+                  return;
+                }
+                setEdgeSelection(undefined);
+                setContextId(undefined);
+                setPeekGroups([]);
+                setGroupSelection(undefined);
+                updateView({ selected: undefined, focus: 0 });
+              }}
+              onNodeDoubleClick={(_event, node) => {
+                const item = display.nodes.find((item) => item.id === node.id);
+                if (item?.kind === 'symbol') {
+                  return;
+                }
+                if (item?.kind === 'folder') {
+                  expand(node.id);
+                } else {
+                  send({ type: 'openFile', nodeId: node.id });
+                }
+              }}
+              onNodeDragStop={(_event, node) => {
+                if (inspecting) {
+                  inspectionPositions.current[node.id] = node.position;
+                } else {
+                  updateView({
+                    positions: { ...viewRef.current.positions, [node.id]: node.position },
+                  });
+                }
+              }}
+              onMoveEnd={(_event, viewport) => {
+                if (readyToSaveViewport.current && !inspecting) {
+                  updateView({ viewport });
+                }
+              }}
+              nodesConnectable={false}
+              edgesReconnectable={false}
+              deleteKeyCode={null}
+              minZoom={0.05}
+              maxZoom={2}
+              onlyRenderVisibleElements
+            >
+              <Background />
+              <Controls showInteractive={false} onFitView={() => fitCanvas(undefined, 250)} />
+            </ReactFlow>
+            {!nodes.length && (
+              <div className="empty">
+                <h2>{scanning ? 'Mapping your source…' : 'Your code, connected'}</h2>
+                <p>
+                  {scanning
+                    ? status
+                    : snapshot?.nodes.length
+                      ? 'No files match the current view.'
+                      : empty.message || 'Use Refresh to scan the workspace.'}
+                </p>
+                {empty.openFolder ? (
+                  <button onClick={() => send({ type: 'openFolder' })}>Open Folder</button>
+                ) : (
+                  !!snapshot?.nodes.length && <button onClick={resetFilters}>Reset Filters</button>
+                )}
+              </div>
+            )}
+          </main>
+          {impactTarget && snapshot ? (
+            <InvestigationPanel
+              snapshot={snapshot}
+              target={impactTarget}
+              onClose={() => setImpactTarget(undefined)}
+              onShowPath={showPath}
+              onSelectFile={selectFile}
+            />
+          ) : (
+            <DetailsPanel
+              snapshot={snapshot}
+              view={view}
+              file={file}
+              group={group}
+              contextFile={contextFile}
+              filesById={filesById}
+              inspectedEdge={inspectedEdge}
+              inspectedImports={inspectedImports}
+              outgoing={outgoing}
+              incoming={incoming}
+              symbolsShown={symbolsFileId === file?.id && !!file}
+              onToggleSymbols={() => {
+                if (symbolsFileId === file?.id) {
+                  clearInspection();
+                  return;
+                }
+                if (!file || !snapshot) {
+                  return;
+                }
+                setTracePath(undefined);
+                setSymbolsFileId(file.id);
+                setSelectedSymbolId(undefined);
+                inspectionPositions.current = {};
+                arrangePeek.current = true;
+                needsViewport.current = true;
+                readyToSaveViewport.current = false;
+              }}
+              onImpact={setImpactTarget}
+              onBack={() => setEdgeSelection(undefined)}
+              onSelectFile={selectFile}
+              onPeek={togglePeek}
+              onExpand={expand}
+              onCollapse={collapse}
+            />
+          )}
+        </div>
+        <footer>
+          <span className={`sync ${sync}`}>
+            {syncLabels[sync]}
+            {scanning && <button onClick={() => send({ type: 'cancel' })}>Cancel</button>}
+            {snapshot &&
+              ` · ${display.visibleFiles}/${snapshot.nodes.length} files · ${snapshot.edges.length} dependencies · ${snapshot.warnings.length} warnings`}
+          </span>
+          <span>
+            {snapshot &&
+              `Synced ${new Date(snapshot.scannedAt).toLocaleTimeString()} · Auto Update ${view.autoUpdate ? 'on' : 'off'}`}
+          </span>
+        </footer>
       </div>
-      <footer>
-        <span className={`sync ${sync}`}>
-          {syncLabels[sync]}
-          {scanning && <button onClick={() => send({ type: 'cancel' })}>Cancel</button>}
-          {snapshot &&
-            ` · ${display.visibleFiles}/${snapshot.nodes.length} files · ${snapshot.edges.length} dependencies · ${snapshot.warnings.length} warnings`}
-        </span>
-        <span>
-          {snapshot &&
-            `Synced ${new Date(snapshot.scannedAt).toLocaleTimeString()} · Auto Update ${view.autoUpdate ? 'on' : 'off'}`}
-        </span>
-      </footer>
-    </div>
+    </ShowPathContext.Provider>
   );
 }

@@ -10,6 +10,7 @@ interface GraphToolbarProps {
   optionsOpen: boolean;
   hasPeek: boolean;
   hasNodes: boolean;
+  hasActiveFile: boolean;
   onQueryChange: (query: string) => void;
   onSelectFile: (id: string) => void;
   onToggleOptions: () => void;
@@ -26,6 +27,7 @@ export function GraphToolbar({
   optionsOpen,
   hasPeek,
   hasNodes,
+  hasActiveFile,
   onQueryChange,
   onSelectFile,
   onToggleOptions,
@@ -73,6 +75,9 @@ export function GraphToolbar({
           </div>
         )}
       </div>
+      <button disabled={!hasActiveFile} onClick={() => send({ type: 'revealActiveFile' })}>
+        Reveal Active File
+      </button>
       <button disabled={scanning} onClick={() => send({ type: 'refresh' })}>
         Refresh
       </button>

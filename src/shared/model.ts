@@ -17,6 +17,8 @@ export interface ImportedSymbol {
   character: number;
   kind?: SymbolKind;
   declaration?: { nodeId: string; symbolId: string };
+  /** Importing file, barrel modules, then declaration file; only resolved graph edges. */
+  resolutionPath?: string[];
 }
 export interface ExportBinding {
   name: string;
@@ -65,14 +67,25 @@ export interface GraphSnapshot {
   warnings: GraphWarning[];
 }
 export type UiMessage =
-  | { type: 'ready' | 'refresh' | 'openFolder' | 'cancel' | 'changeFolder' | 'resetView' }
+  | {
+      type:
+        | 'ready'
+        | 'refresh'
+        | 'openFolder'
+        | 'cancel'
+        | 'changeFolder'
+        | 'resetView'
+        | 'revealActiveFile';
+    }
   | { type: 'saveView'; rootId: string; state: GraphViewState }
   | { type: 'autoUpdate'; enabled: boolean }
   | { type: 'layoutStats'; milliseconds: number; nodes: number }
   | { type: 'openFile'; nodeId: string }
+  | { type: 'openSymbol'; nodeId: string; symbolId: string }
   | { type: 'openDeclaration'; nodeId: string; siteId: string; symbolId: string }
   | { type: 'openImport'; nodeId: string; siteId: string };
 export type HostMessage =
+  | { type: 'activeFile'; nodeId?: string; reveal: boolean }
   | { type: 'snapshot'; snapshot: GraphSnapshot; viewState?: GraphViewState }
   | { type: 'status'; scanning: boolean; message: string; completed?: number; total?: number }
   | { type: 'empty'; message: string; openFolder: boolean }
@@ -99,10 +112,13 @@ export interface GraphViewState {
   focus: 0 | 1 | 2;
   selected?: string;
   autoUpdate: boolean;
+  followEditor: boolean;
 }
 export interface DisplayNode {
   id: string;
-  kind: 'file' | 'folder';
+  kind: 'file' | 'folder' | 'symbol';
+  ownerId?: string;
+  symbolId?: string;
   label: string;
   path: string;
   members: string[];
@@ -116,6 +132,7 @@ export interface DisplayEdge {
   count: number;
   fileEdges?: string[];
   symbolCount?: number;
+  relation?: 'declaration';
 }
 export interface DisplayGraph {
   nodes: DisplayNode[];

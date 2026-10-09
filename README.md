@@ -1,6 +1,6 @@
 # CodeMap AI
 
-Explore TypeScript and JavaScript file dependencies as an interactive graph inside VS Code. v0.2 adds folder views, filters, saved layouts and automatic incremental updates. The extension is read-only; AI editing is planned for later.
+Explore TypeScript and JavaScript file dependencies as an interactive graph inside VS Code. v0.3 adds editor synchronization, barrel routes, on-demand symbol nodes and dependency impact analysis, alongside folder views, filters, saved layouts and automatic incremental updates. The extension is read-only; AI editing is planned for later.
 
 ## Run locally
 
@@ -43,6 +43,26 @@ Bindings show default/named/namespace imports, aliases (`Card → DashboardCard`
 **Peek N files** puts only the directly imported members onto the canvas; the remaining members stay in their folder. **Close Peek** regroups them; **Expand Folder** still opens all members. Peek is temporary and follows the import context of the selected file. Explicit Peek/Close Peek rearranges the visible graph; background source updates preserve positions. Folder layouts from earlier versions are laid out once to accommodate the larger summary cards; Files layouts are retained.
 
 Symbol linking uses static declarations and exports over TypeScript-resolved graph edges. Unknown/computed CommonJS exports, namespace members, external declarations and ambiguous barrel exports remain unclassified and have no declaration shortcut. An import is not proof that a function is called or a binding is used. Imported-symbol counts count bindings across import sites, not unique functions or runtime calls.
+
+### Follow the editor
+
+The file open in the editor has a highlighted border on its visible node (or collapsed folder). **Reveal Active File**, also available as **CodeMap: Reveal Active File** in the Command Palette, selects the file, clears filters hiding it, expands its folder and centers the canvas. Files outside the current graph are ignored. Webview focus keeps the last text editor context.
+
+**View Options → Follow editor** also selects/reveals files as the active editor changes. It defaults to off and is saved per workspace root. Following is suspended while a temporary path/symbol canvas is being inspected. Background refreshes do not repeatedly recenter the active file.
+
+### Barrel routes and symbol exploration
+
+Expand **Import route** under a resolved import binding to distinguish the directly imported file from the declaration file, including named/default aliases, static star exports and imported local re-exports. Route file buttons open source; **Show path on graph** displays only the real directed edges in that chain. Ambiguous or unresolved exports have no invented route.
+
+File details include a **Symbols** section for top-level function/class/interface/type/enum/value declarations. React components appear under their syntactic declaration kind (usually function); framework wrappers are not inferred. Click a declaration to open its exact source position. **Show symbols on graph** temporarily isolates the file and its declarations with dashed **declares** connections. These connections express ownership and are distinct from import arrows; they do not add source dependencies or imply calls. Nested methods and runtime usage are not analyzed.
+
+Path and symbol canvases are temporary. **Back to graph** restores the saved file/folder layout and viewport; dragging or Auto Layout during inspection does not overwrite them. Live updates refresh investigation data; deleted targets or broken routes close the affected inspection.
+
+### Potential impact
+
+**Analyze file impact** follows imports in reverse to list direct and transitive dependents across the complete graph, regardless of display filters. Each result includes one shortest directed dependency explanation ending at the changed file. **Show path on graph** isolates that explanation; cycles terminate and the target does not appear as its own dependent.
+
+**Analyze symbol impact** starts from statically linked import bindings and their barrel routes, then includes file dependents of consumers. Consumers of unrelated named exports are not seeded just because they share a re-export barrel. This is a potential impact estimate: namespace property access, computed exports, runtime calls, dynamic dispatch and consumers outside this workspace are not covered. Transitive results describe file dependencies, not proven symbol usage.
 
 ### Live updates
 
@@ -97,6 +117,7 @@ Architecture: workspace adapter for editor/filesystem access; cached TypeScript 
 - `src/webview/components/` contains the toolbar, view options, node labels and dependency details.
 - `src/webview/hooks/useHostMessages.ts` owns the host message subscription; `bridge.ts` owns the single VS Code API handle.
 - `src/webview/graph-layout.ts` handles Dagre layout; `src/shared/view.ts` handles filtering, Focus, grouping and saved view reconciliation.
+- `src/shared/investigation.ts` computes impact paths and temporary symbol/path projections without changing the source graph.
 - `src/analyzer/` handles import resolution and static symbol linking; controller and scheduler modules handle live updates.
 
 Prettier configuration lives in `.prettierrc.json`. Run `pnpm run format` before committing source changes. Generated `dist/` and `out/` files are build artifacts; edit files under `src/`.

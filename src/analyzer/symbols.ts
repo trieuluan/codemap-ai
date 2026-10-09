@@ -193,6 +193,11 @@ export function collectDeclarations(
   return { declarations, exports };
 }
 
+interface SymbolResolution {
+  declaration: NonNullable<ImportedSymbol['declaration']>;
+  path: string[];
+}
+
 // Follow only statically known exports over TypeScript-resolved file edges. Unknown
 // or ambiguous shapes stay unclassified rather than inventing a declaration.
 export function linkSymbols(
@@ -210,7 +215,7 @@ export function linkSymbols(
     nodeId: string,
     name: string,
     seen = new Set<string>(),
-  ): ImportedSymbol['declaration'] | undefined {
+  ): SymbolResolution | undefined {
     const key = JSON.stringify([nodeId, name]);
     if (seen.has(key) || name === '*') {
       return;
@@ -223,13 +228,13 @@ export function linkSymbols(
       : name === 'default'
         ? []
         : (node?.exports?.filter((item) => item.name === '*') ?? []);
-    const matches = new Map<string, NonNullable<ImportedSymbol['declaration']>>();
+    const matches = new Map<string, SymbolResolution>();
     for (const binding of bindings) {
-      let location: ImportedSymbol['declaration'];
+      let location: SymbolResolution | undefined;
       if (binding.local) {
         const local = node?.declarations?.find((item) => item.name === binding.local);
         if (local) {
-          location = { nodeId, symbolId: local.id };
+          location = { declaration: { nodeId, symbolId: local.id }, path: [] };
         } else {
           for (const item of imports.get(nodeId) ?? []) {
             const symbol = item.site.symbols?.find((symbol) => symbol.local === binding.local);
@@ -246,12 +251,15 @@ export function linkSymbols(
         }
       }
       if (location) {
-        matches.set(JSON.stringify(location), location);
+        matches.set(JSON.stringify(location.declaration), {
+          declaration: location.declaration,
+          path: [nodeId, ...location.path],
+        });
       }
     }
     return matches.size === 1 ? [...matches.values()][0] : undefined;
   }
-  const resolutions = new Map<string, ImportedSymbol['declaration']>();
+  const resolutions = new Map<string, SymbolResolution | undefined>();
   return edges.map((edge) => ({
     ...edge,
     sites: edge.sites.map((site) => ({
@@ -261,13 +269,19 @@ export function linkSymbols(
         if (!resolutions.has(key)) {
           resolutions.set(key, resolve(edge.target, symbol.imported));
         }
-        const declaration = resolutions.get(key);
+        const resolution = resolutions.get(key);
+        const declaration = resolution?.declaration;
         const kind =
           declaration &&
           byId
             .get(declaration.nodeId)
             ?.declarations?.find((item) => item.id === declaration.symbolId)?.kind;
-        return { ...symbol, declaration, kind };
+        return {
+          ...symbol,
+          declaration,
+          kind,
+          resolutionPath: resolution ? [edge.source, ...resolution.path] : undefined,
+        };
       }),
     })),
   }));

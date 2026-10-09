@@ -8,6 +8,8 @@ import type {
 } from '../../shared/model';
 import { groupId } from '../../shared/view';
 import { send } from '../bridge';
+import type { ImpactTarget } from '../../shared/investigation';
+import { SymbolExplorer } from './InvestigationPanel';
 import { ImportSiteDetails } from './ImportSiteDetails';
 
 interface DetailsPanelProps {
@@ -21,6 +23,9 @@ interface DetailsPanelProps {
   inspectedImports: DependencyEdge[];
   outgoing: DependencyEdge[];
   incoming: DependencyEdge[];
+  symbolsShown: boolean;
+  onToggleSymbols: () => void;
+  onImpact: (target: ImpactTarget) => void;
   onBack: () => void;
   onSelectFile: (id: string) => void;
   onPeek: (id: string) => void;
@@ -39,6 +44,9 @@ export function DetailsPanel({
   inspectedImports,
   outgoing,
   incoming,
+  symbolsShown,
+  onToggleSymbols,
+  onImpact,
   onBack,
   onSelectFile,
   onPeek,
@@ -133,18 +141,15 @@ export function DetailsPanel({
                 Collapse Folder
               </button>
             )}
-          {!!file.declarations?.length && (
-            <details>
-              <summary>Declared symbols · {file.declarations.length}</summary>
-              {file.declarations.map((symbol) => (
-                <div className="symbol-row" key={symbol.id}>
-                  <span className="badge">{symbol.kind}</span>
-                  <span>{symbol.name}</span>
-                  <small>L{symbol.line + 1}</small>
-                </div>
-              ))}
-            </details>
-          )}
+          <p>
+            <button onClick={() => onImpact({ nodeId: file.id })}>Analyze file impact</button>
+          </p>
+          <SymbolExplorer
+            file={file}
+            shown={symbolsShown}
+            onToggle={onToggleSymbols}
+            onImpact={onImpact}
+          />
           <h3>
             Dependencies <span>{outgoing.length}</span>
           </h3>

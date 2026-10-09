@@ -1,6 +1,13 @@
 # Change Log
 
-## Unreleased
+## 0.3.0
+
+- Highlight the active editor file, add Reveal Active File and persist optional Follow editor per root.
+- Explain resolved import bindings with directed barrel routes and temporary path canvases.
+- Explore top-level declarations on demand, open exact symbol locations and distinguish ownership connections from imports.
+- Analyze potential file/symbol impact with dependency explanations, cycle handling and filtering of unrelated barrel exports.
+- Preserve saved file/folder layouts while inspecting paths and symbol nodes.
+- Refactor Webview presentation components and standardize source formatting with Prettier.
 
 - Preview imported files and symbols inside collapsed folders for the selected file.
 - Inspect directed file relationships, aliases and type-only imports by clicking edges.

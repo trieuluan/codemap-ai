@@ -2,7 +2,7 @@
   "name": "codemap-ai",
   "displayName": "codemap-ai",
   "description": "Explore TypeScript and JavaScript source dependencies as an interactive graph.",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "engines": {
     "vscode": "^1.140.0"
   },
@@ -16,6 +16,10 @@
       {
         "command": "codemap-ai.openGraph",
         "title": "CodeMap: Open Graph"
+      },
+      {
+        "command": "codemap-ai.revealActiveFile",
+        "title": "CodeMap: Reveal Active File"
       }
     ]
   },

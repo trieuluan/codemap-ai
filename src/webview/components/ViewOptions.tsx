@@ -115,6 +115,14 @@ export function ViewOptions({
         />
         Auto Update
       </label>
+      <label>
+        <input
+          type="checkbox"
+          checked={view.followEditor}
+          onChange={(event) => onUpdateView({ followEditor: event.target.checked })}
+        />
+        Follow editor
+      </label>
       <button onClick={onResetFilters}>Reset Filters</button>
       <button onClick={() => send({ type: 'resetView' })}>Reset View</button>
       <button onClick={() => send({ type: 'changeFolder' })}>Change Folder</button>

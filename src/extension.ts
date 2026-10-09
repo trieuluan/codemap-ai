@@ -14,6 +14,8 @@ export class CodeMapPanel implements vscode.Disposable {
   private choosing = false;
   private disposed = false;
   private ready = false;
+  private activeUri = vscode.window.activeTextEditor?.document.uri.toString();
+  private pendingReveal = false;
   private disposables: vscode.Disposable[] = [];
 
   constructor(
@@ -38,6 +40,14 @@ export class CodeMapPanel implements vscode.Disposable {
       <link rel="stylesheet" href="${css}"><title>CodeMap</title></head>
       <body><div id="root"></div><script nonce="${nonce}" src="${script}"></script></body></html>`;
     this.disposables.push(this.panel.onDidDispose(() => this.dispose()));
+    this.disposables.push(
+      vscode.window.onDidChangeActiveTextEditor((editor) => {
+        if (editor) {
+          this.activeUri = editor.document.uri.toString();
+          this.publishActiveFile();
+        }
+      }),
+    );
     this.disposables.push(
       webview.onDidReceiveMessage((message) => {
         void this.handleMessage(message);
@@ -68,6 +78,17 @@ export class CodeMapPanel implements vscode.Disposable {
   reveal() {
     this.panel.reveal();
   }
+  revealActiveFile() {
+    this.pendingReveal = true;
+    if (this.snapshot) {
+      this.publishActiveFile();
+    }
+  }
+  private publishActiveFile() {
+    const nodeId = this.snapshot?.nodes.find((node) => node.id === this.activeUri)?.id;
+    this.post({ type: 'activeFile', nodeId, reveal: this.pendingReveal });
+    this.pendingReveal = false;
+  }
   private post(message: HostMessage) {
     if (!this.disposed) {
       void this.panel.webview.postMessage(message);
@@ -84,6 +105,9 @@ export class CodeMapPanel implements vscode.Disposable {
             this.ready = true;
             await this.refresh();
           }
+          break;
+        case 'revealActiveFile':
+          this.revealActiveFile();
           break;
         case 'refresh':
           await this.refresh();
@@ -140,6 +164,7 @@ export class CodeMapPanel implements vscode.Disposable {
           await vscode.commands.executeCommand('vscode.openFolder');
           break;
         case 'openFile':
+        case 'openSymbol':
         case 'openDeclaration':
         case 'openImport': {
           if (!('nodeId' in message) || typeof message.nodeId !== 'string') {
@@ -165,6 +190,16 @@ export class CodeMapPanel implements vscode.Disposable {
           }
           let target = node;
           let location: { line: number; character: number } | undefined = site;
+          if (message.type === 'openSymbol') {
+            if (!('symbolId' in message) || typeof message.symbolId !== 'string') {
+              return;
+            }
+            const symbol = node.declarations?.find((item) => item.id === message.symbolId);
+            if (!symbol) {
+              return;
+            }
+            location = symbol;
+          }
           if (message.type === 'openDeclaration') {
             if (!('symbolId' in message) || typeof message.symbolId !== 'string') {
               return;
@@ -264,6 +299,7 @@ export class CodeMapPanel implements vscode.Disposable {
           const state = reconcileView(this.store.get(rootId), snapshot);
           this.store.save(rootId, state);
           this.post({ type: 'snapshot', snapshot, viewState: state });
+          this.publishActiveFile();
         },
         (state, autoUpdate, error) => {
           this.post({ type: 'sync', state, autoUpdate });
@@ -316,6 +352,12 @@ export function activate(context: vscode.ExtensionContext) {
           (message) => output.appendLine(message),
         );
       }
+    }),
+  );
+  context.subscriptions.push(
+    vscode.commands.registerCommand('codemap-ai.revealActiveFile', async () => {
+      await vscode.commands.executeCommand('codemap-ai.openGraph');
+      panel?.revealActiveFile();
     }),
   );
   context.subscriptions.push({ dispose: () => panel?.dispose() });

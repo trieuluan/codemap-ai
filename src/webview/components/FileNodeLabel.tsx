@@ -19,15 +19,17 @@ export function FileNodeLabel({
   return (
     <div className="file-label">
       <strong>
-        {node.kind === 'folder' ? '▣ ' : ''}
+        {node.kind === 'folder' ? '▣ ' : node.kind === 'symbol' ? '◇ ' : ''}
         {node.label}
       </strong>
       <small>
         {node.kind === 'folder'
           ? `${node.members.length} files · ${node.internalEdges} internal dependencies`
-          : node.path.includes('/')
-            ? node.path.slice(0, node.path.lastIndexOf('/'))
-            : '.'}
+          : node.kind === 'symbol'
+            ? node.path
+            : node.path.includes('/')
+              ? node.path.slice(0, node.path.lastIndexOf('/'))
+              : '.'}
       </small>
       {node.kind === 'folder' && (
         <div className="folder-context">

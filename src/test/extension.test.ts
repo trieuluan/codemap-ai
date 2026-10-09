@@ -402,3 +402,56 @@ suite('CodeMap resolver metadata watching', function () {
     }
   });
 });
+
+suite('CodeMap editor and symbol navigation', () => {
+  test('tracks active source files, validates symbol navigation and disposes editor listeners', async () => {
+    const extension = vscode.extensions.all.find((item) => item.packageJSON.name === 'codemap-ai')!;
+    const root = vscode.workspace.workspaceFolders![0];
+    const uri = vscode.Uri.joinPath(root.uri, 'editor-symbol.ts');
+    await vscode.workspace.fs.writeFile(uri, Buffer.from('\nexport function Selected() {}'));
+    const messages: import('../shared/model').HostMessage[] = [];
+    const panel = new CodeMapPanel(extension.extensionUri, () => {});
+    const observed = panel as unknown as {
+      post(message: import('../shared/model').HostMessage): void;
+    };
+    const originalPost = observed.post.bind(panel);
+    observed.post = (message) => {
+      messages.push(message);
+      originalPost(message);
+    };
+    try {
+      await panel.handleMessage({ type: 'ready' });
+      await vscode.window.showTextDocument(uri);
+      panel.revealActiveFile();
+      assert.ok(
+        messages.some(
+          (message) =>
+            message.type === 'activeFile' && message.nodeId === uri.toString() && message.reveal,
+        ),
+      );
+      const graph = await scanWorkspace(root, new vscode.CancellationTokenSource().token, () => {});
+      const node = graph.nodes.find((node) => node.id === uri.toString())!;
+      const symbol = node.declarations![0];
+      await panel.handleMessage({ type: 'openSymbol', nodeId: node.id, symbolId: symbol.id });
+      assert.equal(vscode.window.activeTextEditor?.selection.start.line, 1);
+      assert.equal(vscode.window.activeTextEditor?.selection.start.character, symbol.character);
+      await panel.handleMessage({ type: 'openSymbol', nodeId: node.id, symbolId: 'invalid' });
+      assert.equal(vscode.window.activeTextEditor?.selection.start.line, 1);
+      await vscode.window.showTextDocument(vscode.Uri.joinPath(root.uri, 'b.ts'));
+      assert.ok(
+        messages.some(
+          (message) =>
+            message.type === 'activeFile' && message.nodeId?.endsWith('/b.ts') && !message.reveal,
+        ),
+      );
+      assert.ok((await vscode.commands.getCommands()).includes('codemap-ai.revealActiveFile'));
+      panel.dispose();
+      const count = messages.length;
+      await vscode.window.showTextDocument(vscode.Uri.joinPath(root.uri, 'a.ts'));
+      assert.equal(messages.length, count);
+    } finally {
+      panel.dispose();
+      await vscode.workspace.fs.delete(uri);
+    }
+  });
+});

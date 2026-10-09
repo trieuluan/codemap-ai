@@ -18,6 +18,7 @@ export function defaultView(): GraphViewState {
     hideIsolated: false,
     focus: 0,
     autoUpdate: true,
+    followEditor: false,
   };
 }
 const finite = (value: unknown): value is number =>
@@ -126,6 +127,7 @@ export function readView(value: unknown): GraphViewState {
     ...defaultView(),
     ...state,
     version: 3,
+    followEditor: state.followEditor === true,
     layouts,
     selected: typeof state.selected === 'string' ? state.selected : undefined,
     ...active,

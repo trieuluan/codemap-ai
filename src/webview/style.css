@@ -357,6 +357,7 @@ select {
   padding: 7px 16px;
   border-bottom: 1px solid var(--vscode-panel-border);
   font-size: 11px;
+  align-items: center;
 }
 .context-bar span {
   color: var(--vscode-descriptionForeground);
@@ -366,4 +367,29 @@ details {
 }
 summary {
   cursor: pointer;
+}
+
+.react-flow__node.active-editor-node {
+  box-shadow: 0 0 0 2px var(--vscode-editorWarning-foreground);
+}
+.react-flow__node.symbol-node {
+  border-style: dashed;
+  border-color: var(--vscode-textLink-foreground);
+}
+.import-route {
+  margin: 6px 0 12px;
+  padding-left: 8px;
+  border-left: 2px solid var(--vscode-panel-border);
+}
+.import-route summary {
+  cursor: pointer;
+  color: var(--vscode-descriptionForeground);
+}
+.inline.link {
+  display: inline;
+  width: auto;
+  overflow-wrap: anywhere;
+}
+.symbol-explorer {
+  margin: 12px 0;
 }
