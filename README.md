@@ -77,6 +77,8 @@ The initial target is about 200 files; 1,000-file fixtures are stress tests, not
 ## Development and verification
 
 ```sh
+pnpm run format       # Format source, styles, build scripts and configuration
+pnpm run format:check # Check formatting without changing files
 pnpm run compile      # Host/UI typecheck, lint and both local bundles
 pnpm run watch        # Watch host/UI TypeScript and esbuild
 pnpm run test:unit    # Analyzer, projection, scheduler and view storage tests
@@ -88,3 +90,13 @@ pnpm run package     # Production bundles
 Integration tests create temporary workspaces and require a desktop session; the first run may download VS Code. Fixtures cover React/barrels, Node ESM/CJS, monorepo symlinks, incremental/full equivalence, exclusions, watchers, persistence and empty workspaces. See [performance baseline](docs/BENCHMARK.md) for this machine's measurements. **Output → CodeMap** logs collection, analysis, parse/resolve counts and layout times without source content.
 
 Architecture: workspace adapter for editor/filesystem access; cached TypeScript analyzer; per-root controller/scheduler; independent graph projection and versioned view storage; React Flow/Dagre Webview. Host and browser bundles use separate TypeScript configs, local assets and a restrictive CSP.
+
+### Source organization
+
+- `src/webview/index.tsx` mounts the app; `App.tsx` coordinates graph, selection and canvas state.
+- `src/webview/components/` contains the toolbar, view options, node labels and dependency details.
+- `src/webview/hooks/useHostMessages.ts` owns the host message subscription; `bridge.ts` owns the single VS Code API handle.
+- `src/webview/graph-layout.ts` handles Dagre layout; `src/shared/view.ts` handles filtering, Focus, grouping and saved view reconciliation.
+- `src/analyzer/` handles import resolution and static symbol linking; controller and scheduler modules handle live updates.
+
+Prettier configuration lives in `.prettierrc.json`. Run `pnpm run format` before committing source changes. Generated `dist/` and `out/` files are build artifacts; edit files under `src/`.

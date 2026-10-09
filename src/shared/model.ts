@@ -1,12 +1,29 @@
 export type RelationKind = 'import' | 'type-import' | 're-export' | 'require' | 'dynamic-import';
 export type SymbolKind = 'function' | 'class' | 'type' | 'interface' | 'enum' | 'value';
-export interface SourceSymbol { id: string; name: string; kind: SymbolKind; line: number; character: number }
+export interface SourceSymbol {
+  id: string;
+  name: string;
+  kind: SymbolKind;
+  line: number;
+  character: number;
+}
 export interface ImportedSymbol {
-  id: string; imported: string; local: string; form: 'named' | 'default' | 'namespace' | 'require'; typeOnly: boolean;
-  line: number; character: number; kind?: SymbolKind;
+  id: string;
+  imported: string;
+  local: string;
+  form: 'named' | 'default' | 'namespace' | 'require';
+  typeOnly: boolean;
+  line: number;
+  character: number;
+  kind?: SymbolKind;
   declaration?: { nodeId: string; symbolId: string };
 }
-export interface ExportBinding { name: string; local?: string; siteId?: string; imported?: string }
+export interface ExportBinding {
+  name: string;
+  local?: string;
+  siteId?: string;
+  imported?: string;
+}
 export interface ImportSite {
   id: string;
   specifier: string;
@@ -35,7 +52,10 @@ export interface DependencyEdge {
   target: string;
   sites: ImportSite[];
 }
-export interface GraphWarning { fileId?: string; message: string }
+export interface GraphWarning {
+  fileId?: string;
+  message: string;
+}
 export interface GraphSnapshot {
   revision: number;
   root: { id: string; name: string };
@@ -89,5 +109,16 @@ export interface DisplayNode {
   internalEdges: number;
   related?: { fileId: string; sites: ImportSite[] }[];
 }
-export interface DisplayEdge { id: string; source: string; target: string; count: number; fileEdges?: string[]; symbolCount?: number }
-export interface DisplayGraph { nodes: DisplayNode[]; edges: DisplayEdge[]; visibleFiles: number }
+export interface DisplayEdge {
+  id: string;
+  source: string;
+  target: string;
+  count: number;
+  fileEdges?: string[];
+  symbolCount?: number;
+}
+export interface DisplayGraph {
+  nodes: DisplayNode[];
+  edges: DisplayEdge[];
+  visibleFiles: number;
+}

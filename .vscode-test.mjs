@@ -11,11 +11,22 @@ writeFileSync(join(workspace, 'types.d.ts'), 'export {};');
 mkdirSync(join(workspace, '.vscode'));
 writeFileSync(join(workspace, 'hidden.ts'), 'export {};');
 writeFileSync(join(workspace, 'hidden.js'), 'export {};');
-writeFileSync(join(workspace, '.vscode', 'settings.json'), JSON.stringify({ 'files.exclude': { '**/hidden.ts': true, '**/*.js': { when: '$(basename).ts' } } }));
+writeFileSync(
+  join(workspace, '.vscode', 'settings.json'),
+  JSON.stringify({
+    'files.exclude': { '**/hidden.ts': true, '**/*.js': { when: '$(basename).ts' } },
+  }),
+);
 process.on('exit', () => rmSync(workspace, { recursive: true, force: true }));
 export default defineConfig([
-  { label: 'workspace', files: 'out/test/extension.test.js',
-    launchArgs: [workspace, '--disable-extensions', '--skip-welcome'] },
-  { label: 'empty', files: 'out/test/empty.test.js',
-    launchArgs: ['--new-window', '--disable-extensions', '--skip-welcome'] },
+  {
+    label: 'workspace',
+    files: 'out/test/extension.test.js',
+    launchArgs: [workspace, '--disable-extensions', '--skip-welcome'],
+  },
+  {
+    label: 'empty',
+    files: 'out/test/empty.test.js',
+    launchArgs: ['--new-window', '--disable-extensions', '--skip-welcome'],
+  },
 ]);
