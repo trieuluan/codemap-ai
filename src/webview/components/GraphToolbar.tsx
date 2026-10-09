@@ -3,6 +3,10 @@ import type { FileNode } from '../../shared/model';
 import { send } from '../bridge';
 
 interface GraphToolbarProps {
+  onOverview: () => void;
+  onContext: () => void;
+  contextCount: number;
+  hasSnapshot: boolean;
   canBack: boolean;
   canForward: boolean;
   onBack: () => void;
@@ -25,6 +29,10 @@ interface GraphToolbarProps {
 }
 
 export function GraphToolbar({
+  onOverview,
+  onContext,
+  contextCount,
+  hasSnapshot,
   canBack,
   canForward,
   onBack,
@@ -52,6 +60,12 @@ export function GraphToolbar({
       </button>
       <button aria-label="Navigate forward" disabled={!canForward} onClick={onForward}>
         →
+      </button>
+      <button disabled={!hasSnapshot} onClick={onOverview}>
+        Overview
+      </button>
+      <button disabled={!hasSnapshot} onClick={onContext}>
+        Context{contextCount ? ` (${contextCount})` : ''}
       </button>
       <button onClick={onLibrary}>Saved Views</button>
       <div className="brand">

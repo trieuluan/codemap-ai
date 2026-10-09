@@ -1,3 +1,4 @@
+import { buildContext, contextMarkdown, type ContextBundle } from './shared/context';
 import * as vscode from 'vscode';
 import { LibraryStore } from './library-store';
 import { readAnnotation, annotationExists, targetKey } from './shared/library';
@@ -15,6 +16,9 @@ export class CodeMapPanel implements vscode.Disposable {
   private controller?: GraphController;
   private store: ViewStore;
   private library: LibraryStore;
+  private syncState = 'updating';
+  private contextGeneration = 0;
+  private contextPreview?: { requestId: string; bundle: ContextBundle };
   private choosing = false;
   private disposed = false;
   private ready = false;
@@ -128,6 +132,104 @@ export class CodeMapPanel implements vscode.Disposable {
         case 'changeFolder':
           await this.refresh(true);
           break;
+        case 'buildContext': {
+          if (
+            !this.snapshot ||
+            !('rootId' in message) ||
+            message.rootId !== this.snapshot.root.id ||
+            !('requestId' in message) ||
+            typeof message.requestId !== 'string' ||
+            !('fileIds' in message) ||
+            !Array.isArray(message.fileIds) ||
+            !message.fileIds.every((id) => typeof id === 'string')
+          ) {
+            return;
+          }
+          const rootId = this.snapshot.root.id;
+          const requestId = message.requestId;
+          const generation = ++this.contextGeneration;
+          this.contextPreview = undefined;
+          if (
+            !('revision' in message) ||
+            message.revision !== this.snapshot.revision ||
+            this.syncState !== 'up-to-date'
+          ) {
+            this.post({
+              type: 'contextResult',
+              rootId,
+              requestId,
+              error:
+                'Graph is out of date. Refresh or wait for synchronization, then preview again.',
+            });
+            break;
+          }
+          const graph = this.snapshot;
+          const allowed = new Set(graph.nodes.map((n) => n.id));
+          if (message.fileIds.length > 10000 || message.fileIds.some((id) => !allowed.has(id))) {
+            this.post({
+              type: 'contextResult',
+              rootId,
+              requestId,
+              error: 'Selection contains files outside the current graph.',
+            });
+            break;
+          }
+          const bundle = await buildContext(
+            graph,
+            message.fileIds,
+            this.library.get(rootId).annotations,
+            async (id) => {
+              if (this.disposed || generation !== this.contextGeneration) {
+                throw new Error('Preview cancelled');
+              }
+              return (await vscode.workspace.openTextDocument(vscode.Uri.parse(id))).getText();
+            },
+          );
+          if (
+            this.disposed ||
+            generation !== this.contextGeneration ||
+            this.snapshot?.root.id !== rootId
+          ) {
+            break;
+          }
+          if (this.snapshot.revision !== graph.revision || this.syncState !== 'up-to-date') {
+            this.post({
+              type: 'contextResult',
+              rootId,
+              requestId,
+              error: 'Source changed during preview. Preview again after synchronization.',
+            });
+            break;
+          }
+          this.contextPreview = { requestId, bundle };
+          this.post({ type: 'contextResult', rootId, requestId, bundle });
+          break;
+        }
+        case 'copyContext': {
+          if (
+            !this.snapshot ||
+            !this.contextPreview ||
+            !('rootId' in message) ||
+            message.rootId !== this.snapshot?.root.id ||
+            !('requestId' in message) ||
+            message.requestId !== this.contextPreview.requestId
+          ) {
+            break;
+          }
+          const { bundle, requestId } = this.contextPreview;
+          if (bundle.revision !== this.snapshot.revision || this.syncState !== 'up-to-date') {
+            this.post({
+              type: 'contextResult',
+              rootId: bundle.rootId,
+              requestId,
+              error: 'Preview is stale. Preview again before copying.',
+            });
+            break;
+          }
+          await vscode.env.clipboard.writeText(contextMarkdown(bundle));
+          this.post({ type: 'contextCopied', rootId: bundle.rootId, requestId });
+          break;
+        }
         case 'saveBookmark':
         case 'renameBookmark':
         case 'deleteBookmark':
@@ -360,6 +462,8 @@ export class CodeMapPanel implements vscode.Disposable {
       this.controller?.dispose();
       this.root = root;
       this.snapshot = undefined;
+      this.contextPreview = undefined;
+      this.contextGeneration++;
       const rootId = root.uri.toString();
       await this.store.flush();
       await this.storage?.update('codemap.lastRoot', rootId);
@@ -383,6 +487,7 @@ export class CodeMapPanel implements vscode.Disposable {
           this.publishActiveFile();
         },
         (state, autoUpdate, error) => {
+          this.syncState = state;
           this.post({ type: 'sync', state, autoUpdate });
           this.post({
             type: 'status',
@@ -406,6 +511,8 @@ export class CodeMapPanel implements vscode.Disposable {
       return;
     }
     this.disposed = true;
+    this.contextPreview = undefined;
+    this.contextGeneration++;
     this.controller?.dispose();
     void this.store.flush();
     void this.library.flush();

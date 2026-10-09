@@ -1,3 +1,4 @@
+import type { ContextBundle } from './context';
 import type { WorkspaceLibrary, Annotation } from './library';
 import type { NavigationLocation } from './navigation';
 export type RelationKind = 'import' | 'type-import' | 're-export' | 'require' | 'dynamic-import';
@@ -69,6 +70,8 @@ export interface GraphSnapshot {
   warnings: GraphWarning[];
 }
 export type UiMessage =
+  | { type: 'buildContext'; rootId: string; revision: number; requestId: string; fileIds: string[] }
+  | { type: 'copyContext'; rootId: string; requestId: string }
   | {
       type:
         | 'ready'
@@ -98,6 +101,14 @@ export type UiMessage =
   | { type: 'openDeclaration'; nodeId: string; siteId: string; symbolId: string }
   | { type: 'openImport'; nodeId: string; siteId: string };
 export type HostMessage =
+  | {
+      type: 'contextResult';
+      rootId: string;
+      requestId: string;
+      bundle?: ContextBundle;
+      error?: string;
+    }
+  | { type: 'contextCopied'; rootId: string; requestId: string }
   | { type: 'library'; rootId: string; library: WorkspaceLibrary }
   | { type: 'activeFile'; nodeId?: string; reveal: boolean }
   | { type: 'snapshot'; snapshot: GraphSnapshot; viewState?: GraphViewState }

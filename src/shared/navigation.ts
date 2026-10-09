@@ -9,6 +9,7 @@ export interface SymbolAnchor {
 }
 export interface NavigationLocation {
   view: GraphViewState;
+  overviewDepth?: number;
   viewport?: GraphViewState['viewport'];
   path?: string[];
   symbolsFileId?: string;
@@ -49,9 +50,16 @@ export function readLocation(value: unknown): NavigationLocation | undefined {
       return;
     }
   }
+  if (
+    item.overviewDepth !== undefined &&
+    (!Number.isInteger(item.overviewDepth) || item.overviewDepth < 1 || item.overviewDepth > 1000)
+  ) {
+    return;
+  }
   const geometry = readView({ ...item.view, positions: item.positions, viewport: item.viewport });
   return {
     view: readView(item.view),
+    overviewDepth: item.overviewDepth,
     viewport: geometry.viewport,
     positions: geometry.positions,
     peek: item.peek.slice(0, 10000),
@@ -103,8 +111,14 @@ export function reconcileLocation(location: NavigationLocation, graph: GraphSnap
     ...ids,
     ...graph.nodes.flatMap((n) => (n.declarations ?? []).map((s) => symbolNodeId(n.id, s.id))),
   ]);
+  const groupPositions = reconcileView(
+    { ...location.view, positions: location.positions },
+    graph,
+  ).positions;
   const positions = Object.fromEntries(
-    Object.entries(location.positions).filter(([id]) => visibleIds.has(id)),
+    Object.entries(location.positions).filter(
+      ([id]) => visibleIds.has(id) || Object.hasOwn(groupPositions, id),
+    ),
   );
   const stale = !!(
     (location.path && !validPath) ||
@@ -117,6 +131,12 @@ export function reconcileLocation(location: NavigationLocation, graph: GraphSnap
     location: {
       ...location,
       view,
+      overviewDepth: location.overviewDepth
+        ? Math.min(
+            location.overviewDepth,
+            Math.max(1, ...graph.nodes.map((n) => n.path.split('/').length - 1)),
+          )
+        : undefined,
       path,
       symbolsFileId,
       impact,
@@ -125,7 +145,7 @@ export function reconcileLocation(location: NavigationLocation, graph: GraphSnap
       group:
         location.group && projectGroupExists(location.group, graph) ? location.group : undefined,
       peek: location.peek.filter((id) => projectGroupExists(id, graph)),
-      positions: path || symbolsFileId ? positions : {},
+      positions: path || symbolsFileId || location.overviewDepth ? positions : {},
       viewport: stale ? undefined : location.viewport,
     },
     stale,
@@ -153,6 +173,7 @@ export class NavigationHistory {
   visit(location: NavigationLocation) {
     const identity = (value: NavigationLocation) =>
       JSON.stringify([
+        value.overviewDepth,
         value.view.mode,
         value.view.depth,
         value.view.selected,

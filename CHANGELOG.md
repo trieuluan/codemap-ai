@@ -1,5 +1,13 @@
 # Change Log
 
+## 0.5.0
+
+- Add a temporary Architecture Overview canvas with module depth, entry candidates, most imported files and actual directed cycle groups.
+- Navigate from modules to files while preserving the base graph layout; save/restore architecture views through history and Saved Views.
+- Select working regions with Shift-click, add files via search/details and review optional direct dependency/dependent context.
+- Preview current unsaved source, import bindings, declarations and scoped architecture notes; copy the reviewed context as Markdown locally.
+- Bound preview source sizes, report truncation/read errors, validate graph IDs/root/revision and reject stale previews/copies.
+
 ## 0.4.0
 
 - Add bounded Back/Forward history for graph selection, symbols and import/impact paths, including camera restoration.

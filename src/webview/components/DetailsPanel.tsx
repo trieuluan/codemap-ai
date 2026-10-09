@@ -15,6 +15,7 @@ import { OutsideDependencies } from './OutsideDependencies';
 import { ImportSiteDetails } from './ImportSiteDetails';
 
 interface DetailsPanelProps {
+  contextAction?: React.ReactNode;
   annotationEditor?: React.ReactNode;
   snapshot?: GraphSnapshot;
   view: GraphViewState;
@@ -37,6 +38,7 @@ interface DetailsPanelProps {
 }
 
 export function DetailsPanel({
+  contextAction,
   annotationEditor,
   snapshot,
   view,
@@ -124,6 +126,7 @@ export function DetailsPanel({
               </div>
             </div>
             <div className="inspector-actions">
+              {contextAction}
               <button className="primary" onClick={() => onExpand(group.id)}>
                 Expand Folder
               </button>
@@ -206,6 +209,7 @@ export function DetailsPanel({
               </div>
             </div>
             <div className="inspector-actions">
+              {contextAction}
               <button
                 className="primary"
                 onClick={() => send({ type: 'openFile', nodeId: file.id })}

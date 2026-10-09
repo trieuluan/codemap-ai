@@ -542,3 +542,87 @@ suite('CodeMap saved views and architecture notes', () => {
     }
   });
 });
+
+suite('CodeMap local context preview', () => {
+  test('reads unsaved source, validates roots/revisions/IDs and copies only a current preview', async () => {
+    const extension = vscode.extensions.all.find((item) => item.packageJSON.name === 'codemap-ai')!;
+    const root = vscode.workspace.workspaceFolders![0];
+    const uri = vscode.Uri.joinPath(root.uri, 'a.ts');
+    const document = await vscode.workspace.openTextDocument(uri);
+    const original = document.getText();
+    const previousClipboard = await vscode.env.clipboard.readText();
+    const messages: import('../shared/model').HostMessage[] = [];
+    const data = new Map<string, unknown>();
+    const storage = {
+      get: <T>(key: string) => data.get(key) as T | undefined,
+      update: async (key: string, value: unknown) => {
+        data.set(key, value);
+      },
+    };
+    const panel = new CodeMapPanel(extension.extensionUri, () => {}, storage);
+    const observed = panel as unknown as {
+      post(message: import('../shared/model').HostMessage): void;
+    };
+    const post = observed.post.bind(panel);
+    observed.post = (message) => {
+      messages.push(message);
+      post(message);
+    };
+    const replace = async (text: string) => {
+      const edit = new vscode.WorkspaceEdit();
+      edit.replace(
+        uri,
+        new vscode.Range(document.positionAt(0), document.positionAt(document.getText().length)),
+        text,
+      );
+      await vscode.workspace.applyEdit(edit);
+    };
+    try {
+      await panel.handleMessage({ type: 'ready' });
+      await replace(original + '\n// UNSAVED_CONTEXT_MARKER\n');
+      await panel.handleMessage({ type: 'refresh' });
+      const snapshotMessage = [...messages].reverse().find((m) => m.type === 'snapshot');
+      assert.ok(snapshotMessage?.type === 'snapshot');
+      const graph = snapshotMessage.snapshot;
+      const request = {
+        type: 'buildContext',
+        rootId: root.uri.toString(),
+        revision: graph.revision,
+        requestId: 'context-test',
+        fileIds: [uri.toString()],
+      };
+      await panel.handleMessage({ ...request, rootId: 'foreign' });
+      assert.ok(!messages.some((m) => m.type === 'contextResult'));
+      await panel.handleMessage({ ...request, revision: -1 });
+      assert.ok(
+        messages.some((m) => m.type === 'contextResult' && m.error?.includes('out of date')),
+      );
+      await panel.handleMessage({ ...request, fileIds: ['file:///foreign.ts'] });
+      assert.ok(messages.some((m) => m.type === 'contextResult' && m.error?.includes('outside')));
+      await panel.handleMessage(request);
+      const result = [...messages].reverse().find((m) => m.type === 'contextResult');
+      assert.ok(result?.type === 'contextResult' && result.bundle);
+      assert.ok(result.bundle.files[0].content.includes('UNSAVED_CONTEXT_MARKER'));
+      assert.ok(!JSON.stringify([...data.values()]).includes('UNSAVED_CONTEXT_MARKER'));
+      await panel.handleMessage({
+        type: 'copyContext',
+        rootId: root.uri.toString(),
+        requestId: 'context-test',
+      });
+      assert.ok((await vscode.env.clipboard.readText()).includes('UNSAVED_CONTEXT_MARKER'));
+      await panel.handleMessage({ type: 'autoUpdate', enabled: false });
+      await replace(original + '\n// newer source\n');
+      await panel.handleMessage({
+        type: 'copyContext',
+        rootId: root.uri.toString(),
+        requestId: 'context-test',
+      });
+      assert.ok(messages.some((m) => m.type === 'contextResult' && m.error?.includes('stale')));
+    } finally {
+      panel.dispose();
+      await replace(original);
+      await document.save();
+      await vscode.env.clipboard.writeText(previousClipboard);
+    }
+  });
+});

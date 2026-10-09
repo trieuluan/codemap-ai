@@ -1,6 +1,6 @@
 # CodeMap AI
 
-Explore TypeScript and JavaScript file dependencies as an interactive graph inside VS Code. v0.4 adds navigation history, named Saved Views and architecture notes to the existing file/folder graph, symbol exploration, import routes and impact analysis. The extension is read-only; AI editing is planned for later.
+Explore TypeScript and JavaScript file dependencies as an interactive graph inside VS Code. v0.5 adds an Architecture Overview and a local context builder alongside navigation history, Saved Views, architecture notes, symbol exploration and impact analysis. The extension is read-only; AI editing is planned for later.
 
 ## Run locally
 
@@ -137,4 +137,21 @@ The Details sidebar uses **Connections / Symbols / Notes** sections. Import card
 
 ## Install a local package
 
-Run `pnpm dlx @vscode/vsce package --no-dependencies --skip-license` to create a local `.vsix` (both host and UI are bundled). In VS Code, use **Extensions: Install from VSIX…** and select the package, then reload the window. This packages locally without publishing to Marketplace.
+Run `pnpm dlx @vscode/vsce package --no-dependencies --skip-license` to create a local `.vsix` (both host and UI are bundled). In VS Code, use **Extensions: Install from VSIX…** and select the package, then reload the window. This packages locally without publishing to Marketplace. The local extension ID is `codemap-local.codemap-ai`; this publisher namespace is for local builds.
+
+## Architecture Overview (v0.5)
+
+Use **Overview** to open a temporary module canvas. Choose a folder depth and follow directed aggregate edges; double-click a module or select it in the sidebar to explore its files. **Back to graph** restores the original layout and viewport. Overview supports navigation history and named Saved Views.
+
+The sidebar lists modules, incoming/outgoing file relationships, most imported files and cycle groups from the full graph. Entry candidates have no internal importers and at least one internal dependency (tests excluded); runtime entry points are not inferred from framework configuration. Cycle groups are strongly connected components of real file imports, including type-only imports and self-imports. They are not execution cycles, and aggregation alone never creates a reported file cycle.
+
+## Build a local context region (v0.5)
+
+1. **Shift-click** file/folder nodes to add/remove their files, or use **+ Add file/folder to context** in Details.
+2. Open **Context**. Search to add hidden files; optionally include **direct** dependencies/dependents. Uncheck/remove files you do not want included.
+3. **Preview context** reads current editor contents, including unsaved edits. Review source, declarations, import bindings, dependents, outside imports and matching file/ancestor-folder notes.
+4. **Copy Markdown** copies the reviewed bundle to your local clipboard. No AI provider is contacted, no project code runs and no source is modified.
+
+Source is limited to 50 files, 20,000 characters per file and 150,000 total. Omitted/truncated files and read failures are reported in the preview and copied Markdown. Narrow selections larger than the budget; selected files precede optional neighbors. Related source expands one hop only, so a barrel's targets can be added separately through search or another selection.
+
+A source change/Refresh invalidates the preview; wait for synchronization and rebuild before copying. Context selection and source are session-only and never stored in workspace state or Saved Views. Closing/reopening the context sidebar requires a fresh preview. Context uses only files from the current graph/root, and notes are included as user-authored context, not instructions to execute.

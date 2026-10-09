@@ -1,3 +1,5 @@
+import { ArchitecturePanel, ArchitectureNodeLabel } from './components/ArchitecturePanel';
+import { ContextPanel } from './components/ContextPanel';
 import { readLibrary, targetKey } from '../shared/library';
 import { reconcileLocation, resolveAnchor, type NavigationLocation } from '../shared/navigation';
 import { symbolNodeId } from '../shared/investigation';
@@ -50,6 +52,10 @@ export function App() {
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
   const [library, setLibrary] = useState(() => readLibrary(undefined));
   const [libraryOpen, setLibraryOpen] = useState(false);
+  const [overviewOpen, setOverviewOpen] = useState(false);
+  const [overviewDepth, setOverviewDepth] = useState(2);
+  const [contextOpen, setContextOpen] = useState(false);
+  const [contextIds, setContextIds] = useState<string[]>([]);
   const [notice, setNotice] = useState('');
   const [query, setQuery] = useState('');
   const [optionsOpen, setOptionsOpen] = useState(false);
@@ -69,16 +75,19 @@ export function App() {
   const [selectedSymbolId, setSelectedSymbolId] = useState<string>();
   const [impactTarget, setImpactTarget] = useState<ImpactTarget>();
   const inspectionPositions = useRef<GraphViewState['positions']>({});
-  const inspecting = !!tracePath || !!symbolsFileId;
-  const canvasKey = tracePath
-    ? `path:${JSON.stringify(tracePath)}`
-    : symbolsFileId
-      ? `symbols:${symbolsFileId}`
-      : layoutKey(view);
+  const inspecting = !!tracePath || !!symbolsFileId || overviewOpen;
+  const canvasKey = overviewOpen
+    ? `architecture:${overviewDepth}`
+    : tracePath
+      ? `path:${JSON.stringify(tracePath)}`
+      : symbolsFileId
+        ? `symbols:${symbolsFileId}`
+        : layoutKey(view);
   const clearInspection = (record = true) => {
     if (record) {
       history.begin();
     }
+    setOverviewOpen(false);
     setTracePath(undefined);
     setSymbolsFileId(undefined);
     setSelectedSymbolId(undefined);
@@ -87,6 +96,7 @@ export function App() {
     readyToSaveViewport.current = false;
   };
   const showPath = (path: string[]) => {
+    setOverviewOpen(false);
     history.begin();
     pendingCenter.current = undefined;
     fitMembers.current = undefined;
@@ -128,6 +138,7 @@ export function App() {
         ...viewRef.current,
         viewport: inspecting ? viewRef.current.viewport : flow.getViewport(),
       },
+      overviewDepth: overviewOpen ? overviewDepth : undefined,
       viewport: flow.getViewport(),
       path: tracePath,
       symbolsFileId,
@@ -149,6 +160,7 @@ export function App() {
     };
   };
   const restore = (saved: NavigationLocation) => {
+    setOverviewOpen(false);
     if (!snapshot) {
       return;
     }
@@ -158,6 +170,10 @@ export function App() {
         ? 'Some files, symbols, or path edges no longer exist. Restored the available view.'
         : '',
     );
+    setOverviewOpen(!!location.overviewDepth);
+    if (location.overviewDepth) {
+      setOverviewDepth(location.overviewDepth);
+    }
     setTracePath(location.path);
     setSymbolsFileId(location.symbolsFileId);
     const symbol = resolveAnchor(snapshot, location.symbol);
@@ -301,6 +317,8 @@ export function App() {
         rootId.current = undefined;
         setLibrary(readLibrary(undefined));
         setLibraryOpen(false);
+        setContextOpen(false);
+        setContextIds([]);
         setNotice('');
         needsViewport.current = true;
         readyToSaveViewport.current = false;
@@ -314,6 +332,15 @@ export function App() {
         break;
     }
   });
+  useEffect(() => {
+    if (!snapshot) {
+      return;
+    }
+    const valid = new Set(snapshot.nodes.map((n) => n.id));
+    setContextIds((ids) =>
+      ids.every((id) => valid.has(id)) ? ids : ids.filter((id) => valid.has(id)),
+    );
+  }, [snapshot]);
   const filesById = useMemo(
     () => new Map(snapshot?.nodes.map((node) => [node.id, node]) ?? []),
     [snapshot],
@@ -335,7 +362,9 @@ export function App() {
     const state = inspecting
       ? {
           ...view,
-          mode: 'files' as const,
+          mode: overviewOpen ? ('folders' as const) : ('files' as const),
+          depth: overviewOpen ? overviewDepth : view.depth,
+          expanded: overviewOpen ? [] : view.expanded,
           folder: '',
           hideTests: false,
           hideIsolated: false,
@@ -343,10 +372,24 @@ export function App() {
         }
       : view;
     return withSymbols(
-      projectGraph(source, state, { fileId: contextFile?.id, groups: peekGroups }),
+      projectGraph(
+        source,
+        state,
+        overviewOpen ? undefined : { fileId: contextFile?.id, groups: peekGroups },
+      ),
       filesById.get(symbolsFileId ?? ''),
     );
-  }, [snapshot, view, contextFile?.id, peekGroups, tracePath, symbolsFileId, filesById]);
+  }, [
+    snapshot,
+    view,
+    contextFile?.id,
+    peekGroups,
+    tracePath,
+    symbolsFileId,
+    filesById,
+    overviewOpen,
+    overviewDepth,
+  ]);
   const baseEdges: Edge[] = useMemo(
     () =>
       display.edges.map((edge) => ({
@@ -385,13 +428,23 @@ export function App() {
       id: node.id,
       position: positions[node.id] ?? { x: 0, y: 0 },
       initialWidth: width,
-      initialHeight: node.kind === 'folder' ? 240 : height,
+      initialHeight: overviewOpen ? 96 : node.kind === 'folder' ? 240 : height,
       sourcePosition: tracePath ? Position.Bottom : Position.Right,
       targetPosition: tracePath ? Position.Top : Position.Left,
-      style: { width, height: node.kind === 'folder' ? 240 : height },
+      style: { width, height: overviewOpen ? 96 : node.kind === 'folder' ? 240 : height },
       data: {
         layoutKey: canvasKey,
-        label: (
+        label: overviewOpen ? (
+          <ArchitectureNodeLabel
+            node={node}
+            incoming={display.edges
+              .filter((edge) => edge.target === node.id)
+              .reduce((count, edge) => count + edge.count, 0)}
+            outgoing={display.edges
+              .filter((edge) => edge.source === node.id)
+              .reduce((count, edge) => count + edge.count, 0)}
+          />
+        ) : (
           <FileNodeLabel
             node={node}
             annotation={library.annotations.find(
@@ -402,7 +455,7 @@ export function App() {
                   id: node.kind === 'folder' ? node.path : node.id,
                 }),
             )}
-            contextFile={contextFile}
+            contextFile={overviewOpen ? undefined : contextFile}
             filesById={filesById}
             onPeek={togglePeek}
             onInspectImports={(id) => setEdgeSelection(`context:${id}`)}
@@ -511,7 +564,7 @@ export function App() {
       nodes.map((node) => ({
         ...node,
         selected: node.id === (selectedSymbolId ?? groupSelection ?? view.selected),
-        className: `${node.className ?? ''} ${display.nodes.find((item) => item.id === node.id)?.members.includes(activeFileId ?? '') ? 'active-editor-node' : ''} ${display.nodes.find((item) => item.id === node.id)?.members.some((id) => matchingIds.has(id)) ? 'search-match' : ''}`,
+        className: `${node.className ?? ''} ${display.nodes.find((item) => item.id === node.id)?.members.some((id) => contextIds.includes(id)) ? 'context-region-node' : ''} ${display.nodes.find((item) => item.id === node.id)?.members.includes(activeFileId ?? '') ? 'active-editor-node' : ''} ${display.nodes.find((item) => item.id === node.id)?.members.some((id) => matchingIds.has(id)) ? 'search-match' : ''}`,
       })),
     [
       nodes,
@@ -521,9 +574,10 @@ export function App() {
       display.nodes,
       activeFileId,
       matchingIds,
+      contextIds,
     ],
   );
-  const selected = groupSelection ?? view.selected;
+  const selected = overviewOpen ? groupSelection : (groupSelection ?? view.selected);
   const contextTarget = edgeSelection?.startsWith('context:') ? edgeSelection.slice(8) : undefined;
   const contextSource = display.nodes.find(
     (node) => contextFile && node.members.includes(contextFile.id),
@@ -595,6 +649,44 @@ export function App() {
     ),
   ].sort();
   const maxDepth = Math.max(1, ...folders.map((folder) => folder.split('/').length));
+  const addContext = (ids: string[]) => {
+    setContextIds((current) => [...new Set([...current, ...ids])]);
+    setContextOpen(true);
+    setLibraryOpen(false);
+  };
+  const openOverview = () => {
+    if (snapshot) {
+      setOverviewDepth((depth) =>
+        Math.min(depth, Math.max(1, ...snapshot.nodes.map((n) => n.path.split('/').length - 1))),
+      );
+    }
+    clearInspection();
+    setOverviewOpen(true);
+    setLibraryOpen(false);
+    setContextOpen(false);
+    setImpactTarget(undefined);
+    setGroupSelection(undefined);
+    setEdgeSelection(undefined);
+    inspectionPositions.current = {};
+    arrangePeek.current = true;
+    needsViewport.current = true;
+  };
+  const exploreModule = (path: string) => {
+    clearInspection();
+    setImpactTarget(undefined);
+    setGroupSelection(undefined);
+    const next = switchLayout(viewRef.current, 'folders', overviewDepth);
+    applyView({
+      ...next,
+      folder: path,
+      hideTests: false,
+      hideIsolated: false,
+      focus: 0,
+      expanded: [`folder:${overviewDepth}:${path}`],
+      selected: undefined,
+    });
+    needsViewport.current = true;
+  };
   const resetFilters = () =>
     updateView({ folder: '', hideTests: false, hideIsolated: false, focus: 0 });
   const expand = (id: string) => {
@@ -634,11 +726,21 @@ export function App() {
     <ShowPathContext.Provider value={showPath}>
       <div className="app">
         <GraphToolbar
+          onOverview={openOverview}
+          onContext={() => {
+            setContextOpen(!contextOpen);
+            setLibraryOpen(false);
+          }}
+          contextCount={contextIds.length}
+          hasSnapshot={!!snapshot}
           canBack={history.canBack}
           canForward={history.canForward}
           onBack={() => history.move(-1)}
           onForward={() => history.move(1)}
-          onLibrary={() => setLibraryOpen(!libraryOpen)}
+          onLibrary={() => {
+            setLibraryOpen(!libraryOpen);
+            setContextOpen(false);
+          }}
           workspaceName={snapshot?.root.name ?? 'Workspace'}
           query={query}
           matches={matches}
@@ -674,7 +776,13 @@ export function App() {
         )}
         {inspecting && (
           <div className="context-bar">
-            <strong>{tracePath ? 'Import / impact path' : 'Symbol declarations'}</strong>
+            <strong>
+              {overviewOpen
+                ? 'Architecture overview'
+                : tracePath
+                  ? 'Import / impact path'
+                  : 'Symbol declarations'}
+            </strong>
             <span>Temporary canvas · saved layout is preserved</span>
             <button onClick={() => clearInspection()}>Back to graph</button>
           </div>
@@ -709,7 +817,24 @@ export function App() {
                   setEdgeSelection(edge.id);
                 }
               }}
-              onNodeClick={(_event, node) => {
+              onNodeClick={(event, node) => {
+                const item = display.nodes.find((item) => item.id === node.id);
+                if (event.shiftKey && item) {
+                  const ids =
+                    item.kind === 'symbol' && item.ownerId ? [item.ownerId] : item.members;
+                  setContextIds((current) =>
+                    ids.every((id) => current.includes(id))
+                      ? current.filter((id) => !ids.includes(id))
+                      : [...new Set([...current, ...ids])],
+                  );
+                  setContextOpen(true);
+                  setLibraryOpen(false);
+                  return;
+                }
+                if (overviewOpen) {
+                  setGroupSelection(node.id);
+                  return;
+                }
                 history.begin();
                 const symbol = display.nodes.find(
                   (item) => item.id === node.id && item.kind === 'symbol',
@@ -749,6 +874,14 @@ export function App() {
               }}
               onNodeDoubleClick={(_event, node) => {
                 const item = display.nodes.find((item) => item.id === node.id);
+                if (overviewOpen && item) {
+                  if (item.kind === 'folder') {
+                    exploreModule(item.path);
+                  } else {
+                    selectFile(item.id);
+                  }
+                  return;
+                }
                 if (item?.kind === 'symbol') {
                   return;
                 }
@@ -800,7 +933,21 @@ export function App() {
               </div>
             )}
           </main>
-          {libraryOpen && snapshot ? (
+          {contextOpen && snapshot ? (
+            <ContextPanel
+              key={snapshot.root.id}
+              snapshot={snapshot}
+              selected={contextIds.filter((id) => filesById.has(id))}
+              sync={sync}
+              onToggle={(id) =>
+                setContextIds((current) =>
+                  current.includes(id) ? current.filter((item) => item !== id) : [...current, id],
+                )
+              }
+              onClear={() => setContextIds([])}
+              onClose={() => setContextOpen(false)}
+            />
+          ) : libraryOpen && snapshot ? (
             <LibraryPanel
               library={library}
               snapshot={snapshot}
@@ -810,6 +957,20 @@ export function App() {
                 restore(location);
               }}
               onClose={() => setLibraryOpen(false)}
+            />
+          ) : overviewOpen && snapshot ? (
+            <ArchitecturePanel
+              snapshot={snapshot}
+              depth={overviewDepth}
+              onDepth={(depth) => {
+                setOverviewDepth(depth);
+                inspectionPositions.current = {};
+                arrangePeek.current = true;
+                needsViewport.current = true;
+              }}
+              onExplore={exploreModule}
+              onSelectFile={selectFile}
+              onClose={() => clearInspection()}
             />
           ) : impactTarget && snapshot ? (
             <InvestigationPanel
@@ -821,6 +982,16 @@ export function App() {
             />
           ) : (
             <DetailsPanel
+              contextAction={
+                file || group ? (
+                  <button
+                    className="quiet-button"
+                    onClick={() => addContext(file ? [file.id] : group!.members)}
+                  >
+                    + Add {file ? 'file' : 'folder'} to context
+                  </button>
+                ) : undefined
+              }
               annotationEditor={
                 snapshot && (file || group)
                   ? (() => {

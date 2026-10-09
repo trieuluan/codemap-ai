@@ -121,15 +121,17 @@ export function LibraryPanel({
                   state.hideIsolated && 'Hide isolated',
                   state.focus && `${state.focus}-hop focus`,
                 ].filter(Boolean);
-                const context = v.location.path
-                  ? 'Import path'
-                  : v.location.symbolsFileId
-                    ? 'Symbol canvas'
-                    : v.location.impact
-                      ? 'Impact analysis'
-                      : state.mode === 'folders'
-                        ? `Folders · depth ${state.depth}`
-                        : 'Files';
+                const context = v.location.overviewDepth
+                  ? `Architecture · depth ${v.location.overviewDepth}`
+                  : v.location.path
+                    ? 'Import path'
+                    : v.location.symbolsFileId
+                      ? 'Symbol canvas'
+                      : v.location.impact
+                        ? 'Impact analysis'
+                        : state.mode === 'folders'
+                          ? `Folders · depth ${state.depth}`
+                          : 'Files';
                 return (
                   <article className="view-card" key={v.id}>
                     {renaming === v.id ? (

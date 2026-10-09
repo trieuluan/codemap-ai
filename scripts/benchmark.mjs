@@ -9,6 +9,8 @@ const { analyze, AnalyzerCache } = require('../out/analyzer/analyzer.js');
 const { projectGraph, defaultView } = require('../out/shared/view.js');
 const { NavigationHistory, reconcileLocation } = require('../out/shared/navigation.js');
 const { readLibrary } = require('../out/shared/library.js');
+const { architectureOverview } = require('../out/shared/architecture.js');
+const { buildContext } = require('../out/shared/context.js');
 const dagre = require('@dagrejs/dagre');
 const ignored = new Set([
   '.git',
@@ -111,7 +113,21 @@ async function measure(label, root) {
     annotations: [],
   });
   const libraryMs = performance.now() - started;
+  started = performance.now();
+  architectureOverview(graph, 2);
+  const architectureMs = performance.now() - started;
+  const texts = new Map(files.map((file) => [file.id, file.text]));
+  started = performance.now();
+  await buildContext(
+    graph,
+    graph.nodes.slice(0, 50).map((file) => file.id),
+    [],
+    async (id) => texts.get(id),
+  );
+  const contextMs = performance.now() - started;
   return {
+    architectureMs,
+    contextMs,
     historyMs,
     restoreMs,
     libraryMs,
@@ -158,7 +174,7 @@ for (const count of [200, 1000]) {
 }
 const ms = (value) => value.toFixed(1);
 const report =
-  `# CodeMap v0.4 performance baseline\n\nMeasured ${new Date().toISOString()} on ${os.platform()} ${os.arch()}, ${os.cpus()[0]?.model}, Node ${process.version}. Single-run diagnostic measurements, not performance guarantees or CI thresholds.\n\n| Fixture | Files / edges | Collect ms | Cold analysis ms | Unchanged ms | One edit ms | Parsed / resolved on edit | File layout ms | Folder layout ms (nodes) |\n| --- | --- | --- | --- | --- | --- | --- | --- | --- |\n` +
+  `# CodeMap v0.5 performance baseline\n\nMeasured ${new Date().toISOString()} on ${os.platform()} ${os.arch()}, ${os.cpus()[0]?.model}, Node ${process.version}. Single-run diagnostic measurements, not performance guarantees or CI thresholds.\n\n| Fixture | Files / edges | Collect ms | Cold analysis ms | Unchanged ms | One edit ms | Parsed / resolved on edit | File layout ms | Folder layout ms (nodes) |\n| --- | --- | --- | --- | --- | --- | --- | --- | --- |\n` +
   rows
     .map(
       (row) =>
@@ -172,7 +188,11 @@ const report =
         `| ${row.label} | ${ms(row.historyMs)} | ${ms(row.restoreMs)} | ${ms(row.libraryMs)} |`,
     )
     .join('\n') +
-  '\n\nCollection uses disk reads in this standalone benchmark, not VS Code document loading. Layout uses the same Dagre dimensions/options in Node; it excludes Webview rendering. Update times exclude the 750 ms debounce. Synthetic chains stress layout depth; 1,000 files is a stress fixture, not a support guarantee.\n';
+  '\n\n| Fixture | Architecture summary ms | Build up to 50 context files ms |\n| --- | --- | --- |\n' +
+  rows
+    .map((row) => `| ${row.label} | ${ms(row.architectureMs)} | ${ms(row.contextMs)} |`)
+    .join('\n') +
+  '\n\nContext source reads use in-memory fixture text; browser rendering, VS Code document loading and clipboard are excluded.\n\nCollection uses disk reads in this standalone benchmark, not VS Code document loading. Layout uses the same Dagre dimensions/options in Node; it excludes Webview rendering. Update times exclude the 750 ms debounce. Synthetic chains stress layout depth; 1,000 files is a stress fixture, not a support guarantee.\n';
 mkdirSync('docs', { recursive: true });
 writeFileSync('docs/BENCHMARK.md', report);
 console.log(report);

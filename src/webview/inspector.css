@@ -633,3 +633,135 @@ aside.inspector {
 .outside-card-details .site {
   font-size: 10px;
 }
+.architecture-depth {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 11px;
+  margin: 16px 0;
+}
+.module-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 6px;
+  width: 100%;
+  text-align: left;
+  background: var(--vscode-editor-background);
+  border: 1px solid var(--vscode-panel-border);
+  margin-bottom: 8px;
+  padding: 12px;
+}
+.module-row strong {
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+.module-row small {
+  font-size: 10px;
+  grid-column: 1;
+}
+.module-row > span {
+  grid-column: 2;
+  grid-row: 1/3;
+  align-self: center;
+  color: var(--vscode-textLink-foreground);
+}
+.cycle-card {
+  padding: 10px;
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: 6px;
+  font-size: 11px;
+  margin: 8px 0;
+}
+.context-options {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 16px 0;
+  font-size: 11px;
+}
+.context-options label {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.context-options input,
+.context-file-row input {
+  width: auto;
+  accent-color: var(--vscode-focusBorder);
+}
+.context-results,
+.context-file-list {
+  max-height: 220px;
+  overflow: auto;
+  border-bottom: 1px solid var(--vscode-panel-border);
+}
+.context-file-row {
+  display: flex;
+  gap: 7px;
+  align-items: center;
+  padding: 6px 0;
+  font-size: 10px;
+}
+.context-file-row > span {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.context-file-row small {
+  font-size: 9px;
+}
+.context-file-row .icon-button {
+  font-size: 14px;
+}
+.context-preview {
+  border-top: 1px solid var(--vscode-panel-border);
+  margin-top: 20px;
+}
+.context-preview h3 {
+  margin: 16px 0 8px;
+}
+.context-preview .panel-section > summary > span:first-child {
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+.context-source {
+  font-size: 11px;
+}
+.context-source pre {
+  font: 10px/1.6 var(--vscode-editor-font-family, monospace);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 300px;
+  overflow: auto;
+  background: var(--vscode-editor-background);
+  padding: 10px;
+}
+.context-warning {
+  font-size: 11px;
+  color: var(--vscode-editorWarning-foreground);
+  line-height: 1.6;
+}
+.react-flow__node.context-region-node {
+  border: 2px solid var(--vscode-textLink-foreground);
+}
+
+.architecture-node-label {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow: hidden;
+}
+.architecture-node-label strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+.architecture-node-label small {
+  font-size: 11px;
+}
+.architecture-node-label .eyebrow {
+  font-size: 9px;
+}

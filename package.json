@@ -2,7 +2,7 @@
   "name": "codemap-ai",
   "displayName": "codemap-ai",
   "description": "Explore TypeScript and JavaScript source dependencies as an interactive graph.",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "engines": {
     "vscode": "^1.140.0"
   },
@@ -79,5 +79,6 @@
   "repository": {
     "type": "git",
     "url": "https://github.com/trieuluan/codemap-ai.git"
-  }
+  },
+  "publisher": "codemap-local"
 }
