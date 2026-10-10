@@ -1,4 +1,5 @@
-import type { ContextBundle } from './context';
+import type { AiUiMessage, AiHostMessage } from './ai';
+import type { ContextBundle, ContextOptions } from './context';
 import type { WorkspaceLibrary, Annotation } from './library';
 import type { NavigationLocation } from './navigation';
 export type RelationKind = 'import' | 'type-import' | 're-export' | 'require' | 'dynamic-import';
@@ -70,7 +71,15 @@ export interface GraphSnapshot {
   warnings: GraphWarning[];
 }
 export type UiMessage =
-  | { type: 'buildContext'; rootId: string; revision: number; requestId: string; fileIds: string[] }
+  | AiUiMessage
+  | {
+      type: 'buildContext';
+      rootId: string;
+      revision: number;
+      requestId: string;
+      fileIds: string[];
+      options?: ContextOptions;
+    }
   | { type: 'copyContext'; rootId: string; requestId: string }
   | {
       type:
@@ -101,6 +110,7 @@ export type UiMessage =
   | { type: 'openDeclaration'; nodeId: string; siteId: string; symbolId: string }
   | { type: 'openImport'; nodeId: string; siteId: string };
 export type HostMessage =
+  | AiHostMessage
   | {
       type: 'contextResult';
       rootId: string;

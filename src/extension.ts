@@ -1,3 +1,8 @@
+import { focusedSource } from './ai/focused-context';
+import { contextRegionKey, type ContextOptions } from './shared/context';
+import { AiSession } from './ai/session';
+import { registerCodeMapTools } from './ai/tools';
+import { readAiMessage } from './shared/ai';
 import { buildContext, contextMarkdown, type ContextBundle } from './shared/context';
 import * as vscode from 'vscode';
 import { LibraryStore } from './library-store';
@@ -11,6 +16,7 @@ import type { GraphSnapshot, HostMessage, ImportSite } from './shared/model';
 
 export class CodeMapPanel implements vscode.Disposable {
   private panel: vscode.WebviewPanel;
+  private ai: AiSession;
   private snapshot?: GraphSnapshot;
   private root?: vscode.WorkspaceFolder;
   private controller?: GraphController;
@@ -32,6 +38,15 @@ export class CodeMapPanel implements vscode.Disposable {
     private storage?: StateStorage,
     private log: (message: string) => void = () => {},
   ) {
+    this.ai = new AiSession({
+      post: (message) => this.post(message),
+      log: (message) => this.log(message),
+      context: (rootId, contextId) => this.reviewedContext(rootId, contextId),
+      graph: () => this.snapshot,
+      afterApply: async () => {
+        await this.controller?.refresh();
+      },
+    });
     this.library = new LibraryStore(storage);
     this.store = new ViewStore(storage, (error) => log(`View storage: ${String(error)}`));
     this.panel = vscode.window.createWebviewPanel('codemap', 'CodeMap', vscode.ViewColumn.Active, {
@@ -70,6 +85,7 @@ export class CodeMapPanel implements vscode.Disposable {
             (root) => root.uri.toString() === this.root?.uri.toString(),
           )
         ) {
+          this.ai.invalidate();
           this.controller?.dispose();
           this.controller = undefined;
           this.root = undefined;
@@ -83,6 +99,34 @@ export class CodeMapPanel implements vscode.Disposable {
         }
       }),
     );
+  }
+  private reviewedContext(rootId: string, contextId: string) {
+    const preview = this.contextPreview;
+    if (
+      !preview ||
+      preview.requestId !== contextId ||
+      preview.bundle.rootId !== rootId ||
+      this.snapshot?.root.id !== rootId ||
+      this.snapshot.revision !== preview.bundle.revision ||
+      this.syncState !== 'up-to-date'
+    ) {
+      throw new Error('Context is stale. Preview again after graph synchronization.');
+    }
+    return preview.bundle;
+  }
+  aiToolData() {
+    if (!this.snapshot || this.syncState !== 'up-to-date') {
+      throw new Error(
+        'CodeMap is not synchronized. Open Graph, wait for the scan or Refresh, then retry.',
+      );
+    }
+    return { graph: this.snapshot, bundle: this.contextPreview?.bundle };
+  }
+  async testAiConnection() {
+    return this.ai.testConnection();
+  }
+  async chooseAiModel() {
+    await this.ai.chooseModel();
   }
   reveal() {
     this.panel.reveal();
@@ -108,6 +152,11 @@ export class CodeMapPanel implements vscode.Disposable {
       return;
     }
     try {
+      const aiMessage = readAiMessage(message);
+      if (aiMessage) {
+        await this.ai.handle(aiMessage);
+        return;
+      }
       switch (message.type) {
         case 'ready':
           if (!this.ready) {
@@ -174,6 +223,42 @@ export class CodeMapPanel implements vscode.Disposable {
             });
             break;
           }
+          const rawOptions = 'options' in message ? message.options : undefined;
+          const options: ContextOptions = { mode: 'full' };
+          if (
+            rawOptions &&
+            typeof rawOptions === 'object' &&
+            'mode' in rawOptions &&
+            rawOptions.mode === 'focused'
+          ) {
+            options.mode = 'focused';
+          }
+          if (
+            rawOptions &&
+            typeof rawOptions === 'object' &&
+            'symbol' in rawOptions &&
+            rawOptions.symbol &&
+            typeof rawOptions.symbol === 'object' &&
+            'nodeId' in rawOptions.symbol &&
+            'symbolId' in rawOptions.symbol
+          ) {
+            const requestedSymbol = rawOptions.symbol;
+            const selectedIds = message.fileIds;
+            const node = graph.nodes.find(
+              (n) => n.id === requestedSymbol.nodeId && selectedIds.includes(n.id),
+            );
+            const symbol = node?.declarations?.find((s) => s.id === requestedSymbol.symbolId);
+            if (!node || !symbol) {
+              this.post({
+                type: 'contextResult',
+                rootId,
+                requestId,
+                error: 'Selected symbol no longer exists. Choose another symbol.',
+              });
+              break;
+            }
+            options.symbol = { nodeId: node.id, symbolId: symbol.id };
+          }
           const bundle = await buildContext(
             graph,
             message.fileIds,
@@ -184,6 +269,18 @@ export class CodeMapPanel implements vscode.Disposable {
               }
               return (await vscode.workspace.openTextDocument(vscode.Uri.parse(id))).getText();
             },
+            options.mode === 'focused' ? focusedSource(graph, message.fileIds, options) : undefined,
+          );
+          bundle.mode = options.mode;
+          const focusedSymbol = graph.nodes
+            .find((n) => n.id === options.symbol?.nodeId)
+            ?.declarations?.find((s) => s.id === options.symbol?.symbolId);
+          bundle.regionKey = contextRegionKey(
+            rootId,
+            message.fileIds,
+            focusedSymbol
+              ? `${options.symbol!.nodeId}:${focusedSymbol.kind}:${focusedSymbol.name}`
+              : '',
           );
           if (
             this.disposed ||
@@ -459,6 +556,7 @@ export class CodeMapPanel implements vscode.Disposable {
         await this.controller.refresh();
         return;
       }
+      this.ai.invalidate();
       this.controller?.dispose();
       this.root = root;
       this.snapshot = undefined;
@@ -511,6 +609,7 @@ export class CodeMapPanel implements vscode.Disposable {
       return;
     }
     this.disposed = true;
+    this.ai.dispose();
     this.contextPreview = undefined;
     this.contextGeneration++;
     this.controller?.dispose();
@@ -549,6 +648,23 @@ export function activate(context: vscode.ExtensionContext) {
       panel?.revealActiveFile();
     }),
   );
+  context.subscriptions.push(
+    vscode.commands.registerCommand('codemap-ai.chooseModel', async () => {
+      await vscode.commands.executeCommand('codemap-ai.openGraph');
+      await panel?.chooseAiModel();
+    }),
+  );
+  context.subscriptions.push(
+    vscode.commands.registerCommand('codemap-ai.testConnection', async () => {
+      await vscode.commands.executeCommand('codemap-ai.openGraph');
+      return panel?.testAiConnection();
+    }),
+  );
+  registerCodeMapTools(context, async () => {
+    await vscode.commands.executeCommand('codemap-ai.openGraph');
+    await panel!.handleMessage({ type: 'ready' });
+    return panel!.aiToolData();
+  });
   context.subscriptions.push({ dispose: () => panel?.dispose() });
 }
 export function deactivate() {}

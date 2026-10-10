@@ -2,7 +2,7 @@
   "name": "codemap-ai",
   "displayName": "codemap-ai",
   "description": "Explore TypeScript and JavaScript source dependencies as an interactive graph.",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "engines": {
     "vscode": "^1.140.0"
   },
@@ -20,6 +20,118 @@
       {
         "command": "codemap-ai.revealActiveFile",
         "title": "CodeMap: Reveal Active File"
+      },
+      {
+        "command": "codemap-ai.chooseModel",
+        "title": "CodeMap: Choose AI Model"
+      },
+      {
+        "command": "codemap-ai.testConnection",
+        "title": "CodeMap: Test AI Connection"
+      }
+    ],
+    "configuration": {
+      "title": "CodeMap",
+      "properties": {
+        "codemap.ai.model": {
+          "type": "string",
+          "default": "",
+          "description": "Model ID provided through VS Code Language Model API. Use CodeMap: Choose AI Model to select."
+        }
+      }
+    },
+    "languageModelTools": [
+      {
+        "name": "codemap_get_architecture",
+        "displayName": "CodeMap: Architecture",
+        "toolReferenceName": "codemapArchitecture",
+        "canBeReferencedInPrompt": true,
+        "modelDescription": "Workspace module overview, central files, entry candidates and static import cycles. Does not analyze runtime calls.",
+        "userDescription": "Workspace module overview, central files, entry candidates and static import cycles. Does not analyze runtime calls.",
+        "tags": [
+          "codemap",
+          "read-only"
+        ],
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "depth": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 10
+            }
+          },
+          "required": [],
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "codemap_get_dependencies",
+        "displayName": "CodeMap: Dependencies",
+        "toolReferenceName": "codemapDependencies",
+        "canBeReferencedInPrompt": true,
+        "modelDescription": "Dependencies, dependents, symbols, import source positions and outside graph dependencies of an exact file in CodeMap.",
+        "userDescription": "Dependencies, dependents, symbols, import source positions and outside graph dependencies of an exact file in CodeMap.",
+        "tags": [
+          "codemap",
+          "read-only"
+        ],
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "Exact workspace-relative path from the CodeMap graph."
+            }
+          },
+          "required": [
+            "path"
+          ],
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "codemap_get_selected_context",
+        "displayName": "CodeMap: Selected Context",
+        "toolReferenceName": "codemapSelectedContext",
+        "canBeReferencedInPrompt": true,
+        "modelDescription": "Read the latest explicitly reviewed CodeMap Context preview, including source and annotations. User must select files and click Preview context first. Never expands to other files.",
+        "userDescription": "Read the latest explicitly reviewed CodeMap Context preview, including source and annotations. User must select files and click Preview context first. Never expands to other files.",
+        "tags": [
+          "codemap",
+          "read-only"
+        ],
+        "inputSchema": {
+          "type": "object",
+          "properties": {},
+          "required": [],
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "codemap_get_impact",
+        "displayName": "CodeMap: Impact",
+        "toolReferenceName": "codemapImpact",
+        "canBeReferencedInPrompt": true,
+        "modelDescription": "Static transitive dependents and import routes for an existing CodeMap file; not runtime behavior.",
+        "userDescription": "Static transitive dependents and import routes for an existing CodeMap file; not runtime behavior.",
+        "tags": [
+          "codemap",
+          "read-only"
+        ],
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "Exact workspace-relative path from the CodeMap graph."
+            }
+          },
+          "required": [
+            "path"
+          ],
+          "additionalProperties": false
+        }
       }
     ]
   },
@@ -40,7 +152,8 @@
     "watch:ui": "tsc --noEmit --watch --project tsconfig.webview.json",
     "benchmark": "pnpm run compile-tests && node scripts/benchmark.mjs",
     "format": "prettier --write \"src/**/*.{ts,tsx,css}\" \"scripts/*.mjs\" \"*.{js,mjs,json}\" \".vscode/*.json\"",
-    "format:check": "prettier --check \"src/**/*.{ts,tsx,css}\" \"scripts/*.mjs\" \"*.{js,mjs,json}\" \".vscode/*.json\""
+    "format:check": "prettier --check \"src/**/*.{ts,tsx,css}\" \"scripts/*.mjs\" \"*.{js,mjs,json}\" \".vscode/*.json\"",
+    "test:ai:live": "pnpm run compile-tests && pnpm run compile && node scripts/live-model-smoke.mjs"
   },
   "devDependencies": {
     "@types/mocha": "^10.0.10",
@@ -65,7 +178,9 @@
     "@dagrejs/dagre": "^3.1.1",
     "@xyflow/react": "^12.12.0",
     "react": "^19.3.0",
-    "react-dom": "^19.3.0"
+    "react-dom": "^19.3.0",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1"
   },
   "extensionKind": [
     "workspace"

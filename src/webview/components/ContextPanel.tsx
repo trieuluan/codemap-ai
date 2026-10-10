@@ -1,6 +1,8 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import type { GraphSnapshot, HostMessage, SyncState } from '../../shared/model';
-import { contextCandidates, contextLimits, type ContextBundle } from '../../shared/context';
+import { useContextPreview } from '../hooks/useContextPreview';
+import { AiAssistant } from './AiAssistant';
+import React, { useMemo, useState } from 'react';
+import type { GraphSnapshot, SyncState } from '../../shared/model';
+import { contextCandidates, contextLimits } from '../../shared/context';
 import { PanelHeading, PanelSection } from './InspectorParts';
 import { send } from '../bridge';
 
@@ -11,6 +13,7 @@ export function ContextPanel({
   onClear,
   onClose,
   sync,
+  selectedSymbol,
 }: {
   snapshot: GraphSnapshot;
   selected: string[];
@@ -18,51 +21,40 @@ export function ContextPanel({
   onClear: () => void;
   onClose: () => void;
   sync: SyncState;
+  selectedSymbol?: { nodeId: string; symbolId: string };
 }) {
+  const [focused, setFocused] = useState(true);
+  const [symbolChoice, setSymbolChoice] = useState<string>();
   const [query, setQuery] = useState('');
   const [dependencies, setDependencies] = useState(false);
   const [dependents, setDependents] = useState(false);
   const [excluded, setExcluded] = useState<string[]>([]);
-  const [bundle, setBundle] = useState<ContextBundle>();
-  const [building, setBuilding] = useState(false);
-  const [message, setMessage] = useState('');
-  const request = useRef<string | undefined>(undefined);
   const candidates = useMemo(
     () => contextCandidates(snapshot, selected, dependencies, dependents),
     [snapshot, selected, dependencies, dependents],
   );
   const fileIds = candidates.filter((file) => !excluded.includes(file.id)).map((file) => file.id);
-  const selectionKey = JSON.stringify(fileIds);
-  useEffect(() => {
-    request.current = undefined;
-    setBundle(undefined);
-    setBuilding(false);
-    setMessage('');
-  }, [snapshot.root.id, snapshot.revision, selectionKey]);
-  useEffect(() => {
-    const receive = (event: MessageEvent<HostMessage>) => {
-      const value = event.data;
-      if (value.type !== 'contextResult' && value.type !== 'contextCopied') {
-        return;
-      }
-      if (value.rootId !== snapshot.root.id || value.requestId !== request.current) {
-        return;
-      }
-      if (value.type === 'contextCopied') {
-        setMessage('Copied to clipboard.');
-        return;
-      }
-      setBuilding(false);
-      setMessage(value.error ?? '');
-      if (value.bundle?.revision === snapshot.revision) {
-        setBundle(value.bundle);
-      } else {
-        setBundle(undefined);
-      }
-    };
-    window.addEventListener('message', receive);
-    return () => window.removeEventListener('message', receive);
-  }, [snapshot.root.id, snapshot.revision]);
+  const symbolOptions = snapshot.nodes
+    .filter((n) => fileIds.includes(n.id))
+    .flatMap((n) =>
+      (n.declarations ?? []).map((s) => ({
+        key: JSON.stringify([n.id, s.kind, s.name]),
+        label: `${n.name} · ${s.name}`,
+        nodeId: n.id,
+        symbolId: s.id,
+      })),
+    );
+  const focus =
+    symbolChoice === undefined
+      ? symbolOptions.find(
+          (s) => s.nodeId === selectedSymbol?.nodeId && s.symbolId === selectedSymbol.symbolId,
+        )
+      : symbolOptions.find((s) => s.key === symbolChoice);
+  const { bundle, building, message, contextId, regionKey, conversationKey, prepare } =
+    useContextPreview(snapshot, fileIds, {
+      mode: focused ? 'focused' : 'full',
+      symbol: focus ? { nodeId: focus.nodeId, symbolId: focus.symbolId } : undefined,
+    });
   const matches = snapshot.nodes
     .filter(
       (file) =>
@@ -74,7 +66,7 @@ export function ContextPanel({
       <PanelHeading
         eyebrow="Working region"
         title="Build context"
-        subtitle="Select files, review source, then copy locally."
+        subtitle="Choose a working region, then ask AI. Preview is optional."
         action={
           <button className="icon-button" aria-label="Close context" onClick={onClose}>
             ×
@@ -131,6 +123,40 @@ export function ContextPanel({
             />
             Include direct dependents
           </label>
+        </div>
+        <div className="context-strategy">
+          <label>
+            Source context
+            <select
+              aria-label="Source context strategy"
+              value={focused ? 'focused' : 'full'}
+              onChange={(e) => setFocused(e.target.value === 'focused')}
+            >
+              <option value="focused">Focused excerpts</option>
+              <option value="full">Whole files</option>
+            </select>
+          </label>
+          {!!symbolOptions.length && (
+            <label>
+              Prioritize symbol
+              <select
+                aria-label="Prioritize context symbol"
+                value={focus?.key ?? ''}
+                onChange={(e) => setSymbolChoice(e.target.value)}
+              >
+                <option value="">Region overview</option>
+                {symbolOptions.map((symbol) => (
+                  <option key={symbol.key} value={symbol.key}>
+                    {symbol.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+          <p className="helper-text">
+            Ask uses relevant declarations and imports. Edit always prepares whole files. Related
+            files are included only when selected above.
+          </p>
         </div>
         <div className="section-toolbar">
           <span className="eyebrow">
@@ -194,18 +220,7 @@ export function ContextPanel({
             className="primary"
             disabled={!fileIds.length || building || sync !== 'up-to-date'}
             onClick={() => {
-              const requestId = crypto.randomUUID();
-              request.current = requestId;
-              setBuilding(true);
-              setBundle(undefined);
-              setMessage('');
-              send({
-                type: 'buildContext',
-                rootId: snapshot.root.id,
-                revision: snapshot.revision,
-                requestId,
-                fileIds,
-              });
+              void prepare().catch(() => {});
             }}
           >
             {building ? 'Building…' : 'Preview context'}
@@ -213,8 +228,8 @@ export function ContextPanel({
           <button
             disabled={!bundle?.files.length || sync !== 'up-to-date'}
             onClick={() => {
-              if (request.current) {
-                send({ type: 'copyContext', rootId: snapshot.root.id, requestId: request.current });
+              if (contextId) {
+                send({ type: 'copyContext', rootId: snapshot.root.id, requestId: contextId });
               }
             }}
           >
@@ -226,11 +241,22 @@ export function ContextPanel({
             {message}
           </p>
         )}
+        <AiAssistant
+          prepareContext={prepare}
+          regionKey={regionKey}
+          conversationKey={conversationKey}
+          rootId={snapshot.root.id}
+          revision={snapshot.revision}
+          fileCount={fileIds.length}
+          sync={sync}
+        />
         {bundle && (
           <div className="context-preview">
             <h3>Preview · {bundle.files.length} files</h3>
             <p className="helper-text">
-              {bundle.characters.toLocaleString()} source characters · revision {bundle.revision}
+              {bundle.characters.toLocaleString()} source characters · ~
+              {bundle.estimatedTokens?.toLocaleString()} source tokens (estimate) ·{' '}
+              {bundle.mode ?? 'full'} · revision {bundle.revision}
             </p>
             {bundle.warnings.map((warning, i) => (
               <p className="context-warning" key={i}>
@@ -277,14 +303,30 @@ export function ContextPanel({
                 ))}
                 <details className="context-source">
                   <summary>Source {file.truncated ? '· truncated' : ''}</summary>
-                  <pre>{file.content}</pre>
+                  {file.excerpts ? (
+                    <>
+                      <p className="helper-text">Focused source; other lines omitted.</p>
+                      {file.excerpts.map((excerpt) => (
+                        <div key={excerpt.startLine}>
+                          <small>
+                            L{excerpt.startLine}–L{excerpt.endLine}
+                          </small>
+                          <pre>{excerpt.content}</pre>
+                        </div>
+                      ))}
+                    </>
+                  ) : (
+                    <pre>{file.content}</pre>
+                  )}
                 </details>
               </PanelSection>
             ))}
           </div>
         )}
       </div>
-      <div className="inspector-footnote">Local preview only · no network · no source changes</div>
+      <div className="inspector-footnote">
+        Preview stays local · AI sends only on request · edits require Apply
+      </div>
     </aside>
   );
 }

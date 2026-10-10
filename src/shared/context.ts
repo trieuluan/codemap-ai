@@ -2,7 +2,22 @@ import type { FileNode, GraphSnapshot } from './model';
 import type { Annotation } from './library';
 
 export const contextLimits = { files: 50, perFile: 20000, total: 150000 };
+export interface ContextOptions {
+  mode: 'full' | 'focused';
+  symbol?: { nodeId: string; symbolId: string };
+}
+export interface ContextExcerpt {
+  startLine: number;
+  endLine: number;
+  content: string;
+}
+export function contextRegionKey(rootId: string, ids: string[], symbolName = '') {
+  return JSON.stringify([rootId, [...new Set(ids)].sort(), symbolName]);
+}
 export interface ContextFile {
+  excerpts?: ContextExcerpt[];
+  excerpted?: boolean;
+  sourceDigest?: string;
   id: string;
   path: string;
   language: string;
@@ -22,6 +37,9 @@ export interface ContextBundle {
   warnings: string[];
   requested: number;
   characters: number;
+  regionKey?: string;
+  mode?: 'full' | 'focused';
+  estimatedTokens?: number;
 }
 export function contextCandidates(
   graph: GraphSnapshot,
@@ -50,6 +68,10 @@ export async function buildContext(
   fileIds: string[],
   notes: Annotation[],
   read: (fileId: string) => Promise<string>,
+  selectSource?: (
+    file: FileNode,
+    text: string,
+  ) => { content: string; excerpts?: ContextExcerpt[]; excerpted?: boolean; sourceDigest?: string },
 ): Promise<ContextBundle> {
   const filesById = new Map(graph.nodes.map((n) => [n.id, n]));
   const ids = [...new Set(fileIds)];
@@ -74,7 +96,14 @@ export async function buildContext(
       continue;
     }
     try {
-      const text = await read(id);
+      const original = await read(id);
+      const selected = selectSource?.(file, original);
+      if (selected?.excerpted && !selected.content && original) {
+        bundle.warnings.push(
+          `${file.path}: no complete source lines fit the focused excerpt budget. Use Whole files.`,
+        );
+      }
+      const text = selected?.content ?? original;
       const remaining = contextLimits.total - bundle.characters;
       if (remaining <= 0) {
         bundle.warnings.push('Source budget reached; remaining files were omitted.');
@@ -91,6 +120,25 @@ export async function buildContext(
         path: file.path,
         language: file.language,
         content,
+        ...(selected
+          ? {
+              excerpted: selected.excerpted,
+              sourceDigest: selected.sourceDigest,
+              excerpts: selected.excerpts?.reduce((result, excerpt) => {
+                const used = result.reduce((total, e) => total + e.content.length + 1, 0);
+                const remaining = content.length - used;
+                if (remaining > 0) {
+                  const part = excerpt.content.slice(0, remaining);
+                  result.push({
+                    ...excerpt,
+                    content: part,
+                    endLine: excerpt.startLine + part.split('\n').length - 1,
+                  });
+                }
+                return result;
+              }, [] as ContextExcerpt[]),
+            }
+          : {}),
         truncated,
         declarations: file.declarations ?? [],
         imports: graph.edges
@@ -108,6 +156,7 @@ export async function buildContext(
       bundle.warnings.push(`${file.path}: source could not be read.`);
     }
   }
+  bundle.estimatedTokens = Math.ceil(bundle.characters / 3);
   return bundle;
 }
 function importSummary(edge: ContextFile['imports'][number]) {
@@ -144,7 +193,17 @@ export function contextMarkdown(bundle: ContextBundle) {
         `Outside: ${file.outside.map((d) => `${d.site.specifier} (${d.status})`).join(', ') || 'None'}`,
         ...file.notes.map((n) => `Architecture ${n.role ?? 'note'} (${n.target.kind}): ${n.text}`),
         file.truncated ? 'Source truncated.' : '',
-        `${delimiter}${file.language}\n${file.content}\n${delimiter}`,
+        file.excerpted
+          ? 'Focused excerpts only; omitted source is unknown. Line numbers below are original source lines.'
+          : '',
+        file.excerpts
+          ? file.excerpts
+              .map(
+                (excerpt) =>
+                  `Source L${excerpt.startLine}–L${excerpt.endLine}:\n${delimiter}${file.language}\n${excerpt.content}\n${delimiter}`,
+              )
+              .join('\n\n')
+          : `${delimiter}${file.language}\n${file.content}\n${delimiter}`,
       ]
         .filter(Boolean)
         .join('\n\n');

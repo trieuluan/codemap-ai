@@ -1,5 +1,21 @@
 # Change Log
 
+## 0.6.0
+
+- Add source-free model connection diagnostics and an opt-in live smoke test.
+- Prioritize AST symbol/import excerpts for Ask, preserve original line ranges and show estimated/exact input usage; Edit uses full files.
+- Keep bounded conversation history per file/symbol region through Refresh, with stale markers, Copy reply/code and inline Markdown citations.
+
+- Redesign the AI composer with Ask/Edit tabs, a compact model picker, keyboard submit and Markdown replies (including GFM tables and code blocks).
+- Prepare selected context automatically on Ask/Edit; manual Preview is optional.
+
+- Add VS Code model selection and AI questions in the Context panel with streaming, cancellation, token checks and validated source references.
+- Contribute architecture, dependency, reviewed-context and static-impact tools to VS Code Agent.
+- Add structured proposals for existing context files, read-only VS Code diff previews and explicit Apply after all diffs are opened.
+- Reject unknown/truncated proposal targets and conflicting editor changes; refresh the graph after unsaved edits are applied.
+- Add fake-model unit/integration coverage; source previews remain local and AI sends only on user request.
+
+
 ## 0.5.0
 
 - Add a temporary Architecture Overview canvas with module depth, entry candidates, most imported files and actual directed cycle groups.

@@ -938,6 +938,15 @@ export function App() {
               key={snapshot.root.id}
               snapshot={snapshot}
               selected={contextIds.filter((id) => filesById.has(id))}
+              selectedSymbol={snapshot.nodes
+                .flatMap((n) =>
+                  (n.declarations ?? []).map((s) => ({
+                    nodeId: n.id,
+                    symbolId: s.id,
+                    canvasId: symbolNodeId(n.id, s.id),
+                  })),
+                )
+                .find((s) => s.canvasId === selectedSymbolId)}
               sync={sync}
               onToggle={(id) =>
                 setContextIds((current) =>
