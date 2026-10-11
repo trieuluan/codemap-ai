@@ -1,6 +1,7 @@
 import * as assert from 'node:assert/strict';
 import * as vscode from 'vscode';
 import { AiSession } from '../ai/session';
+import { liveWorkflow } from '../ai/workflow-check';
 import { buildContext, contextRegionKey } from '../shared/context';
 import type { AiHostMessage } from '../shared/ai';
 import { scanWorkspace } from '../workspace';
@@ -41,6 +42,85 @@ suite('CodeMap AI integration (fake model, no network)', () => {
       ...extra,
     };
   }
+  test('synthetic workflow verifies single/multiple edits and report-backed repair with actual tasks', async function () {
+    this.timeout(20000);
+    const plan = (paths: string[]) =>
+      JSON.stringify({
+        summary: 'Fixture plan',
+        steps: paths.map((path) => ({ path, role: 'edit', reason: 'Follow fixture goal' })),
+      });
+    const change = (path: string, oldText: string, content: string) => ({
+      path,
+      start: { line: 1, character: 0 },
+      end: { line: 1, character: oldText.length },
+      oldText,
+      content,
+      reason: 'Fixture edit',
+    });
+    const replies = [
+      plan(['a.ts']),
+      JSON.stringify({
+        summary: 'Single file',
+        changes: [
+          {
+            path: 'a.ts',
+            start: { line: 1, character: 0 },
+            end: { line: 3, character: 0 },
+            oldText: 'import { value } from "./b";\nexport const result = value;\n',
+            content: 'export const result = 42;\n',
+            reason: 'Fixture edit',
+          },
+        ],
+      }),
+      plan(['a.ts', 'b.ts']),
+      JSON.stringify({
+        summary: 'Multiple files',
+        changes: [
+          change('a.ts', 'export const result = 42;', 'export const result = 43;'),
+          change('b.ts', 'export const value = 1;', 'export const value = 2;'),
+        ],
+      }),
+      plan(['b.ts']),
+      JSON.stringify({
+        summary: 'Repair test',
+        changes: [change('b.ts', 'export const value = 2;', 'export const value = 3;')],
+      }),
+    ];
+    let calls = 0;
+    const current = vscode.window.activeTextEditor;
+    const response = await liveWorkflow(
+      model('', {
+        sendRequest: async (messages) => {
+          if (calls >= 4) {
+            const prompt = messages
+              .flatMap((m) => m.content)
+              .filter(
+                (c): c is vscode.LanguageModelTextPart => c instanceof vscode.LanguageModelTextPart,
+              )
+              .map((c) => c.value)
+              .join('\n');
+            assert.match(prompt, /BEGIN UNTRUSTED VERIFICATION/);
+            assert.match(prompt, /b.ts must export value = 3/);
+          }
+          const reply = replies[calls++];
+          assert.ok(reply, 'No unexpected provider calls');
+          return {
+            text: (async function* () {
+              yield reply;
+            })(),
+            stream: (async function* () {})(),
+          };
+        },
+      }),
+    );
+    assert.equal(response.status, 'passed', JSON.stringify(response));
+    assert.equal(calls, 6);
+    assert.equal(response.workspaceSourceSent, false);
+    assert.equal((response.steps as { status: string }[]).length, 6);
+    if (current) {
+      assert.ok(!current.document.isClosed, 'Existing editor is preserved');
+    }
+  });
   test('streams responses and returns only valid citations; no unsolicited model calls', async () => {
     const { graph, bundle } = await fixture();
     const messages: AiHostMessage[] = [];
@@ -80,6 +160,409 @@ suite('CodeMap AI integration (fake model, no network)', () => {
       session.dispose();
     }
   });
+  test('empty model responses fail visibly, never become successful history and allow retry', async () => {
+    const { graph, bundle } = await fixture();
+    const events: AiHostMessage[] = [];
+    let response = '';
+    const session = new AiSession({
+      post: (m) => events.push(m),
+      context: () => bundle,
+      graph: () => graph,
+      afterApply: async () => {},
+      configuredModel: () => 'codemap-test',
+      selectModels: async () => [
+        model('', {
+          sendRequest: async () => ({
+            text: (async function* () {
+              yield response;
+            })(),
+            stream: (async function* () {})(),
+          }),
+        }),
+      ],
+    });
+    const base = {
+      type: 'aiRequest' as const,
+      rootId: graph.root.id,
+      contextId: 'ctx',
+      question: 'Explain',
+      mode: 'ask' as const,
+    };
+    try {
+      for (const [index, empty] of ['', '  \n'].entries()) {
+        response = empty;
+        const requestId = `empty-${index}`;
+        await session.handle({ ...base, requestId });
+        const done = events.find(
+          (m) => m.type === 'aiProgress' && m.requestId === requestId && m.done,
+        );
+        assert.ok(done?.type === 'aiProgress' && done.error?.includes('returned no text'));
+        assert.ok(!events.some((m) => m.type === 'aiConnection' && m.state === 'ready'));
+      }
+      await session.handle({
+        type: 'aiHistory',
+        rootId: graph.root.id,
+        regionKey:
+          bundle.regionKey ??
+          contextRegionKey(
+            graph.root.id,
+            bundle.files.map((f) => f.id),
+          ),
+      });
+      const history = events.filter((m) => m.type === 'aiConversation').at(-1);
+      assert.ok(history?.type === 'aiConversation');
+      assert.equal(history.turns.length, 0);
+      response = 'Here is the explanation.';
+      await session.handle({ ...base, requestId: 'retry' });
+      const done = events.find((m) => m.type === 'aiProgress' && m.requestId === 'retry' && m.done);
+      assert.ok(done?.type === 'aiProgress' && !done.error);
+      assert.equal(done.text, response);
+      const usage = events.find((m) => m.type === 'aiUsage' && m.requestId === 'retry');
+      assert.ok(usage?.type === 'aiUsage');
+      assert.equal(usage.historyTurns, 0);
+    } finally {
+      session.dispose();
+    }
+  });
+  test('unsupported CLI and zero-budget models never receive source requests or pass connection checks', async () => {
+    const { graph, bundle } = await fixture();
+    for (const metadata of [
+      { vendor: 'copilotcli', maxInputTokens: 0 },
+      { vendor: 'copilotcli', maxInputTokens: 128000 },
+      { vendor: 'test', maxInputTokens: 0 },
+    ]) {
+      const events: AiHostMessage[] = [];
+      let requests = 0,
+        counts = 0;
+      const session = new AiSession({
+        post: (m) => events.push(m),
+        context: () => bundle,
+        graph: () => graph,
+        afterApply: async () => {},
+        configuredModel: () => 'codemap-test',
+        selectModels: async () => [
+          model('', {
+            ...metadata,
+            countTokens: async () => {
+              counts++;
+              return 0;
+            },
+            sendRequest: async () => {
+              requests++;
+              return { text: (async function* () {})(), stream: (async function* () {})() };
+            },
+          }),
+        ],
+      });
+      try {
+        await session.handle({
+          type: 'aiRequest',
+          rootId: graph.root.id,
+          contextId: 'ctx',
+          requestId: 'unsupported',
+          question: 'Explain',
+          mode: 'ask',
+        });
+        assert.ok(events.some((m) => m.type === 'aiProgress' && m.done && m.error));
+        assert.ok(events.some((m) => m.type === 'aiModel' && m.error));
+        assert.equal(await session.testConnection(), false);
+        assert.equal(requests, 0);
+        assert.equal(counts, 0);
+        assert.ok(!events.some((m) => m.type === 'aiConversation'));
+      } finally {
+        session.dispose();
+      }
+    }
+  });
+  test('unsaved edits while the model is responding reject stale Ask and Plan results', async () => {
+    for (const [mode, truncated] of [
+      ['ask', false],
+      ['plan', false],
+      ['ask', true],
+    ] as const) {
+      const { graph, bundle } = await fixture();
+      const document = await vscode.workspace.openTextDocument(
+        vscode.Uri.parse(bundle.files[0].id),
+      );
+      const original = document.getText();
+      if (truncated) {
+        bundle.files[0].content = original.slice(0, 5);
+        bundle.files[0].truncated = true;
+      }
+      const events: AiHostMessage[] = [];
+      let release!: () => void;
+      let start!: () => void;
+      const started = new Promise<void>((resolve) => {
+        start = resolve;
+      });
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const session = new AiSession({
+        post: (m) => events.push(m),
+        context: () => bundle,
+        graph: () => graph,
+        afterApply: async () => {},
+        configuredModel: () => 'codemap-test',
+        selectModels: async () => [
+          model('', {
+            sendRequest: async () => ({
+              text: (async function* () {
+                start();
+                await gate;
+                yield mode === 'ask'
+                  ? 'A stale answer'
+                  : JSON.stringify({
+                      summary: 'Stale plan',
+                      steps: [
+                        { path: bundle.files[0].path, role: 'edit', reason: 'Change source' },
+                      ],
+                    });
+              })(),
+              stream: (async function* () {})(),
+            }),
+          }),
+        ],
+      });
+      let pending: Promise<void> | undefined;
+      try {
+        pending = session.handle({
+          type: 'aiRequest',
+          rootId: graph.root.id,
+          contextId: 'ctx',
+          requestId: mode,
+          question: 'Explain or plan',
+          mode,
+        });
+        await Promise.race([
+          started,
+          pending.then(() => {
+            throw new Error('Request completed before the model stream started.');
+          }),
+        ]);
+        const edit = new vscode.WorkspaceEdit();
+        edit.insert(document.uri, document.positionAt(original.length), '\n// manual change\n');
+        await vscode.workspace.applyEdit(edit);
+        release();
+        await pending;
+        const done = events.find((m) => m.type === 'aiProgress' && m.done);
+        assert.ok(done?.type === 'aiProgress' && done.error?.includes('Source changed'));
+        assert.equal(done.plan, undefined);
+        assert.ok(!events.some((m) => m.type === 'aiConnection' && m.state === 'ready'));
+      } finally {
+        release();
+        await pending;
+        session.dispose();
+        const edit = new vscode.WorkspaceEdit();
+        edit.replace(
+          document.uri,
+          new vscode.Range(document.positionAt(0), document.positionAt(document.getText().length)),
+          original,
+        );
+        await vscode.workspace.applyEdit(edit);
+        await document.save();
+      }
+    }
+  });
+  test('repair Plan and generated edits include only an explicitly selected current verification report', async () => {
+    let { graph, bundle } = await fixture();
+    const file = bundle.files.find((f) => f.path === 'b.ts')!;
+    const document = await vscode.workspace.openTextDocument(vscode.Uri.parse(file.id));
+    const original = document.getText();
+    const events: AiHostMessage[] = [];
+    const prompts: string[] = [];
+    let response = '';
+    const proposalText = (oldText: string, content: string) =>
+      JSON.stringify({
+        summary: 'Change value',
+        changes: [
+          {
+            path: file.path,
+            start: { line: 1, character: 17 },
+            end: { line: 1, character: 18 },
+            oldText,
+            content,
+            reason: 'Fixture repair',
+          },
+        ],
+      });
+    response = proposalText('2', '3');
+    const session = new AiSession({
+      post: (m) => events.push(m),
+      context: () => bundle,
+      graph: () => graph,
+      afterApply: async () => {
+        graph = await scanWorkspace(
+          vscode.workspace.workspaceFolders![0],
+          new vscode.CancellationTokenSource().token,
+          () => {},
+          { revision: graph.revision + 1 },
+        );
+      },
+      editableFiles: () => [file.id],
+      configuredModel: () => 'codemap-test',
+      selectModels: async () => [
+        model('', {
+          sendRequest: async (messages) => {
+            prompts.push(
+              messages
+                .flatMap((m) =>
+                  m.content
+                    .filter((c) => c instanceof vscode.LanguageModelTextPart)
+                    .map((c) => c.value),
+                )
+                .join('\n'),
+            );
+            return {
+              text: (async function* () {
+                yield response;
+              })(),
+              stream: (async function* () {})(),
+            };
+          },
+        }),
+      ],
+    });
+    const base = {
+      type: 'aiRequest' as const,
+      rootId: graph.root.id,
+      contextId: 'ctx',
+      question: 'Repair source',
+      editableFileIds: [file.id],
+    };
+    try {
+      await session.handle({ ...base, requestId: 'initial', mode: 'propose' });
+      const initial = events.find(
+        (m) => m.type === 'aiProgress' && m.requestId === 'initial' && m.proposal,
+      );
+      assert.ok(initial?.type === 'aiProgress' && initial.proposal);
+      await session.diff(initial.proposal.id, file.id, initial.proposal.changes[0].id);
+      await session.apply(initial.proposal.id);
+      const report = events.filter((m) => m.type === 'aiVerification').at(-1);
+      assert.ok(report?.type === 'aiVerification' && !report.report.stale);
+      assert.ok(!prompts[0].includes('BEGIN UNTRUSTED VERIFICATION'));
+      bundle = await buildContext(graph, [file.id], [], async () => document.getText());
+      response = JSON.stringify({
+        summary: 'Repair current source',
+        steps: [{ path: file.path, role: 'edit', reason: 'Fix current value after verification' }],
+      });
+      await session.handle({
+        ...base,
+        requestId: 'repair-plan',
+        mode: 'plan',
+        verificationId: report.report.id,
+      });
+      const planning = events.find(
+        (m) => m.type === 'aiProgress' && m.requestId === 'repair-plan' && m.plan,
+      );
+      assert.ok(planning?.type === 'aiProgress' && planning.plan, JSON.stringify(events.at(-1)));
+      assert.ok(prompts[1].includes('BEGIN UNTRUSTED VERIFICATION'));
+      assert.ok(prompts[1].includes(report.report.id));
+      response = proposalText('3', '4');
+      await session.handle({
+        ...base,
+        requestId: 'repair-generate',
+        mode: 'propose',
+        planId: planning.plan.id,
+        planStepIds: [planning.plan.steps[0].id],
+        verificationId: report.report.id,
+      });
+      const generated = events.find(
+        (m) => m.type === 'aiProgress' && m.requestId === 'repair-generate' && m.done,
+      );
+      assert.ok(generated?.type === 'aiProgress' && generated.proposal, JSON.stringify(generated));
+      assert.ok(prompts[2].includes('BEGIN UNTRUSTED VERIFICATION'));
+      const manual = new vscode.WorkspaceEdit();
+      manual.insert(document.uri, new vscode.Position(0, 0), '// manual\n');
+      await vscode.workspace.applyEdit(manual);
+      await session.handle({
+        ...base,
+        requestId: 'stale-report',
+        mode: 'plan',
+        verificationId: report.report.id,
+      });
+      assert.equal(
+        prompts.length,
+        3,
+        'Stale verification must be rejected before provider request',
+      );
+      assert.ok(
+        events.some(
+          (m) =>
+            m.type === 'aiProgress' && m.requestId === 'stale-report' && m.error?.includes('stale'),
+        ),
+      );
+    } finally {
+      session.dispose();
+      const restore = new vscode.WorkspaceEdit();
+      restore.replace(
+        document.uri,
+        new vscode.Range(document.positionAt(0), document.positionAt(document.getText().length)),
+        original,
+      );
+      await vscode.workspace.applyEdit(restore);
+      await document.save();
+      await vscode.commands.executeCommand('workbench.action.closeAllEditors');
+    }
+  });
+  test('live response formats archive range citations and JSON-fenced actions for explicit navigation', async () => {
+    const { graph, bundle } = await fixture();
+    const file = bundle.files.find((f) => f.path === 'a.ts')!;
+    const events: AiHostMessage[] = [];
+    const session = new AiSession({
+      post: (m) => events.push(m),
+      context: () => bundle,
+      graph: () => graph,
+      afterApply: async () => {},
+      configuredModel: () => 'codemap-test',
+      selectModels: async () => [
+        model(
+          'Evidence [[a.ts:L1-L2]].\n\n```json\n' +
+            JSON.stringify([{ kind: 'focus', paths: ['a.ts'], reason: 'Inspect source' }]) +
+            '\n```',
+        ),
+      ],
+    });
+    try {
+      await session.handle({
+        type: 'aiRequest',
+        rootId: graph.root.id,
+        contextId: 'ctx',
+        requestId: 'range',
+        question: 'Explain',
+        mode: 'ask',
+      });
+      const done = events.find((m) => m.type === 'aiProgress' && m.done);
+      assert.ok(done?.type === 'aiProgress');
+      assert.equal(done.text, 'Evidence [[a.ts:L1-L2]].');
+      assert.deepEqual(done.references, [{ fileId: file.id, path: 'a.ts', line: 1, endLine: 2 }]);
+      const conversation = [...events].reverse().find((m) => m.type === 'aiConversation');
+      assert.ok(conversation?.type === 'aiConversation');
+      assert.equal(conversation.turns[0].actions?.[0].kind, 'focus');
+      assert.ok(!events.some((m) => m.type === 'aiAction'));
+      await session.handle({
+        type: 'aiOpenReference',
+        requestId: 'range',
+        fileId: file.id,
+        line: 1,
+      });
+      // showTextDocument resolves before selection/activation reaches the UI.
+      const editor = () =>
+        vscode.window.visibleTextEditors.find(
+          (e) => e.document.uri.toString() === file.id && e.selection.start.line === 0,
+        );
+      const deadline = Date.now() + 2000;
+      while (!editor() && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      const opened = editor();
+      assert.ok(opened);
+      assert.equal(opened.selection.start.line, 0);
+    } finally {
+      session.dispose();
+      await vscode.commands.executeCommand('workbench.action.closeAllEditors');
+    }
+  });
   test('missing model, token budget and stale context produce scoped errors', async () => {
     const { graph, bundle } = await fixture();
     for (const scenario of ['missing', 'budget', 'stale']) {
@@ -117,6 +600,211 @@ suite('CodeMap AI integration (fake model, no network)', () => {
       } finally {
         session.dispose();
       }
+    }
+  });
+  test('task plans enforce approved files, preview real imports without mutation and recheck permission at Apply', async () => {
+    const { graph, bundle } = await fixture();
+    const file = bundle.files.find((f) => f.path === 'a.ts')!;
+    const other = bundle.files.find((f) => f.path === 'b.ts')!;
+    const document = await vscode.workspace.openTextDocument(vscode.Uri.parse(file.id));
+    const original = document.getText(),
+      dirty = document.isDirty;
+    const first = original.split('\n')[0];
+    let allowed = [file.id];
+    let response = JSON.stringify({
+      summary: 'Remove an import',
+      steps: [
+        { path: file.path, role: 'edit', reason: 'Remove the dependency' },
+        { path: other.path, role: 'read', reason: 'Check exported source' },
+      ],
+    });
+    let calls = 0;
+    let holdPreview = false;
+    let releasePreview: (() => void) | undefined;
+    let previewStarted: (() => void) | undefined;
+    const events: AiHostMessage[] = [];
+    const session = new AiSession({
+      post: (m) => events.push(m),
+      context: () => bundle,
+      graph: () => graph,
+      afterApply: async () => {},
+      editableFiles: () => allowed,
+      previewGraph: async (texts, token) => {
+        if (holdPreview) {
+          await new Promise<void>((resolve) => {
+            releasePreview = resolve;
+            previewStarted?.();
+          });
+          assert.ok(token.isCancellationRequested);
+          return graph;
+        }
+        return scanWorkspace(vscode.workspace.workspaceFolders![0], token, () => {}, {
+          textOverrides: texts,
+          revision: graph.revision,
+        });
+      },
+      configuredModel: () => 'codemap-test',
+      selectModels: async () => [
+        model('', {
+          sendRequest: async () => {
+            calls++;
+            return {
+              text: (async function* () {
+                yield response;
+              })(),
+              stream: (async function* () {})(),
+            };
+          },
+        }),
+      ],
+    });
+    const request = {
+      type: 'aiRequest' as const,
+      rootId: graph.root.id,
+      contextId: 'ctx',
+      question: 'Remove the dependency',
+    };
+    try {
+      await session.handle({
+        ...request,
+        requestId: 'plan',
+        mode: 'plan',
+        editableFileIds: [file.id],
+      });
+      const planning = events.find((m) => m.type === 'aiProgress' && m.plan);
+      assert.ok(planning?.type === 'aiProgress' && planning.plan);
+      assert.equal(document.getText(), original);
+      response = JSON.stringify({
+        summary: 'Remove import',
+        changes: [
+          {
+            path: file.path,
+            start: { line: 1, character: 0 },
+            end: { line: 1, character: first.length },
+            oldText: first,
+            content: '// Dependency removed',
+            reason: 'Remove import',
+          },
+        ],
+      });
+      await session.handle({
+        ...request,
+        requestId: 'bad-plan',
+        mode: 'propose',
+        planId: planning.plan.id,
+        planStepIds: [planning.plan.steps[1].id],
+        editableFileIds: [file.id, other.id],
+      });
+      assert.equal(calls, 1);
+      assert.ok(
+        events.some((m) => m.type === 'aiProgress' && m.requestId === 'bad-plan' && m.error),
+      );
+      await session.handle({
+        ...request,
+        requestId: 'generate',
+        mode: 'propose',
+        planId: planning.plan.id,
+        planStepIds: [planning.plan.steps[0].id],
+        editableFileIds: [file.id],
+      });
+      const done = events.find(
+        (m) => m.type === 'aiProgress' && m.requestId === 'generate' && m.done,
+      );
+      assert.ok(done?.type === 'aiProgress' && done.proposal, JSON.stringify(done));
+      const proposal = done.proposal;
+      await session.handle({
+        type: 'aiPreviewGraph',
+        proposalId: proposal.id,
+        changeIds: proposal.changes.map((c) => c.id),
+      });
+      const preview = events.find((m) => m.type === 'aiGraphPreview');
+      assert.ok(preview?.type === 'aiGraphPreview', JSON.stringify(events.at(-1)));
+      assert.ok(preview.before.edges.some((e) => e.source === file.id && e.target === other.id));
+      assert.ok(!preview.proposed.edges.some((e) => e.source === file.id && e.target === other.id));
+      assert.equal(document.getText(), original);
+      assert.equal(document.isDirty, dirty);
+      holdPreview = true;
+      const started = new Promise<void>((resolve) => {
+        previewStarted = resolve;
+      });
+      const cancelledPreview = session.handle({
+        type: 'aiPreviewGraph',
+        proposalId: proposal.id,
+        changeIds: proposal.changes.map((c) => c.id),
+      });
+      await started;
+      await session.handle({ type: 'aiCancel' });
+      releasePreview!();
+      await cancelledPreview;
+      assert.equal(
+        events.filter((m) => m.type === 'aiGraphPreview').length,
+        1,
+        'Cancelled preview must not publish stale results',
+      );
+      await session.handle({
+        type: 'aiDiff',
+        proposalId: proposal.id,
+        fileId: file.id,
+        changeId: proposal.changes[0].id,
+      });
+      allowed = [];
+      await session.handle({
+        type: 'aiApply',
+        proposalId: proposal.id,
+        changeIds: proposal.changes.map((c) => c.id),
+      });
+      assert.ok(events.some((m) => m.type === 'aiApplied' && m.error?.includes('permission')));
+      assert.equal(document.getText(), original);
+      assert.equal(document.isDirty, dirty);
+    } finally {
+      session.dispose();
+      await vscode.commands.executeCommand('workbench.action.closeAllEditors');
+    }
+  });
+  test('model cannot propose edits in read-only task context even with forged client permissions', async () => {
+    const { graph, bundle } = await fixture();
+    const file = bundle.files.find((f) => f.path === 'b.ts')!;
+    const events: AiHostMessage[] = [];
+    const response = JSON.stringify({
+      summary: 'Forbidden',
+      changes: [
+        {
+          path: file.path,
+          start: { line: 1, character: 0 },
+          end: { line: 1, character: 0 },
+          oldText: '',
+          content: '// Unexpected edit\n',
+          reason: 'Attempt',
+        },
+      ],
+    });
+    const session = new AiSession({
+      post: (m) => events.push(m),
+      context: () => bundle,
+      graph: () => graph,
+      afterApply: async () => {},
+      editableFiles: () => bundle.files.filter((f) => f.id !== file.id).map((f) => f.id),
+      configuredModel: () => 'codemap-test',
+      selectModels: async () => [model(response)],
+    });
+    try {
+      await session.handle({
+        type: 'aiRequest',
+        rootId: graph.root.id,
+        contextId: 'ctx',
+        requestId: 'forged',
+        question: 'Edit',
+        mode: 'propose',
+        editableFileIds: [
+          file.id,
+          ...bundle.files.filter((f) => f.id !== file.id).map((f) => f.id),
+        ],
+      });
+      const done = events.find((m) => m.type === 'aiProgress' && m.done);
+      assert.ok(done?.type === 'aiProgress' && done.error?.includes('read-only'));
+      assert.equal(done.proposal, undefined);
+    } finally {
+      session.dispose();
     }
   });
   test('Stop suppresses a late response and prevents proposal publication', async () => {
@@ -384,6 +1072,16 @@ suite('CodeMap AI integration (fake model, no network)', () => {
         revision: bundle.revision + 1,
         files: bundle.files.map((f) => ({ ...f, content: f.content + '\n// fresh source' })),
       };
+      const changed = new vscode.WorkspaceEdit();
+      for (const file of current.files) {
+        const doc = await vscode.workspace.openTextDocument(vscode.Uri.parse(file.id));
+        changed.replace(
+          doc.uri,
+          new vscode.Range(doc.positionAt(0), doc.positionAt(doc.getText().length)),
+          file.content,
+        );
+      }
+      await vscode.workspace.applyEdit(changed);
       await session.handle({
         type: 'aiHistory',
         rootId: graph.root.id,
@@ -418,6 +1116,19 @@ suite('CodeMap AI integration (fake model, no network)', () => {
       assert.ok(last?.type === 'aiConversation' && last.turns.length === 0);
     } finally {
       session.dispose();
+      const restore = new vscode.WorkspaceEdit();
+      for (const file of bundle.files) {
+        const doc = await vscode.workspace.openTextDocument(vscode.Uri.parse(file.id));
+        restore.replace(
+          doc.uri,
+          new vscode.Range(doc.positionAt(0), doc.positionAt(doc.getText().length)),
+          file.content,
+        );
+      }
+      await vscode.workspace.applyEdit(restore);
+      for (const file of bundle.files) {
+        await (await vscode.workspace.openTextDocument(vscode.Uri.parse(file.id))).save();
+      }
     }
   });
   test('AI graph suggestions require an explicit archived action ID and current revision', async () => {

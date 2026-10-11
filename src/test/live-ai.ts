@@ -1,3 +1,4 @@
+import { modelUnavailableReason } from '../shared/ai-model';
 import { liveWorkflow } from './live-workflow';
 import * as vscode from 'vscode';
 import { writeFileSync } from 'node:fs';
@@ -25,7 +26,8 @@ export async function run() {
     ]);
     report.models = models.map((m) => ({ id: m.id, name: m.name, vendor: m.vendor }));
     const requested = process.env.CODEMAP_TEST_MODEL_ID;
-    const model = requested ? models.find((m) => m.id === requested) : models[0];
+    const available = models.filter((m) => !modelUnavailableReason(m));
+    const model = requested ? available.find((m) => m.id === requested) : available[0];
     if (!model) {
       report.status = 'unavailable';
       report.reason =

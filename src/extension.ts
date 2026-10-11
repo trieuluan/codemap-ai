@@ -1,4 +1,5 @@
 import { focusedSource } from './ai/focused-context';
+import { runWorkflowCheck } from './ai/workflow-command';
 import { contextRegionKey, type ContextOptions } from './shared/context';
 import { AiSession } from './ai/session';
 import { registerCodeMapTools } from './ai/tools';
@@ -13,6 +14,7 @@ import { GraphController } from './controller';
 import { ViewStore, type StateStorage } from './view-store';
 import { defaultView, reconcileView } from './shared/view';
 import type { GraphSnapshot, HostMessage, ImportSite } from './shared/model';
+import { scanWorkspace } from './workspace';
 
 export class CodeMapPanel implements vscode.Disposable {
   private panel: vscode.WebviewPanel;
@@ -43,9 +45,20 @@ export class CodeMapPanel implements vscode.Disposable {
       log: (message) => this.log(message),
       context: (rootId, contextId) => this.reviewedContext(rootId, contextId),
       graph: () => this.snapshot,
+      editableFiles: () =>
+        this.snapshot ? this.store.get(this.snapshot.root.id).workingSet?.editable : undefined,
       isCurrent: () => this.syncState === 'up-to-date' && !this.disposed,
       afterApply: async () => {
         await this.controller?.refresh();
+      },
+      previewGraph: async (texts, token) => {
+        if (!this.root || !this.snapshot) {
+          throw new Error('Open a workspace first.');
+        }
+        return await scanWorkspace(this.root, token, () => {}, {
+          textOverrides: texts,
+          revision: this.snapshot.revision,
+        });
       },
     });
     this.library = new LibraryStore(storage);
@@ -66,6 +79,10 @@ export class CodeMapPanel implements vscode.Disposable {
       <body><div id="root"></div><script nonce="${nonce}" src="${script}"></script></body></html>`;
     this.disposables.push(this.panel.onDidDispose(() => this.dispose()));
     this.disposables.push(
+      vscode.workspace.onDidChangeTextDocument(() => this.publishFileStatus()),
+      vscode.workspace.onDidSaveTextDocument(() => this.publishFileStatus()),
+      vscode.workspace.onDidCloseTextDocument(() => this.publishFileStatus()),
+      vscode.languages.onDidChangeDiagnostics(() => this.publishFileStatus()),
       vscode.window.onDidChangeActiveTextEditor((editor) => {
         if (editor) {
           this.activeUri = editor.document.uri.toString();
@@ -142,6 +159,32 @@ export class CodeMapPanel implements vscode.Disposable {
     const nodeId = this.snapshot?.nodes.find((node) => node.id === this.activeUri)?.id;
     this.post({ type: 'activeFile', nodeId, reveal: this.pendingReveal });
     this.pendingReveal = false;
+    this.publishFileStatus();
+  }
+  private publishFileStatus() {
+    if (!this.snapshot) {
+      return;
+    }
+    const documents = new Map(
+      vscode.workspace.textDocuments.map((d) => [d.uri.toString(), d.isDirty]),
+    );
+    const diagnostics = new Map(
+      vscode.languages.getDiagnostics().map(([uri, list]) => [uri.toString(), list]),
+    );
+    this.post({
+      type: 'fileStatus',
+      rootId: this.snapshot.root.id,
+      files: this.snapshot.nodes.flatMap((n) => {
+        const list = diagnostics.get(n.id) ?? [];
+        const errors = list.filter((d) => d.severity === vscode.DiagnosticSeverity.Error).length;
+        const warnings = list.filter(
+          (d) => d.severity === vscode.DiagnosticSeverity.Warning,
+        ).length;
+        return documents.get(n.id) || errors || warnings
+          ? [{ id: n.id, dirty: documents.get(n.id) ?? false, errors, warnings }]
+          : [];
+      }),
+    });
   }
   private post(message: HostMessage) {
     if (!this.disposed) {
@@ -631,6 +674,9 @@ export function activate(context: vscode.ExtensionContext) {
   let panel: CodeMapPanel | undefined;
   const output = vscode.window.createOutputChannel('CodeMap');
   context.subscriptions.push(output);
+  context.subscriptions.push(
+    vscode.commands.registerCommand('codemap-ai.checkWorkflow', () => runWorkflowCheck(output)),
+  );
   context.subscriptions.push(
     vscode.commands.registerCommand('codemap-ai.openGraph', () => {
       if (panel) {

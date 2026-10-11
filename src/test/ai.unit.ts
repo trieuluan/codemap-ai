@@ -74,6 +74,36 @@ test('citations accept only reviewed file paths and valid one-based source lines
     [{ fileId: 'file:///a.ts', path: 'src/a.ts', line: 2 }],
   );
 });
+test('range citations validate both bounds and deduplicate without losing single-line references', () => {
+  assert.deepEqual(
+    aiReferences(
+      '[[src/a.ts:L1-L2]] [[src/a.ts:L1-2]] [[src/a.ts:L1]] ' +
+        '[[src/a.ts:L2-L1]] [[src/a.ts:L1-L99]] [[src/a.ts:L0-L2]] ' +
+        '[[missing.ts:L1-L2]] [[src/a.ts:L1-L9007199254740992]]',
+      bundle,
+    ),
+    [
+      { fileId: 'file:///a.ts', path: 'src/a.ts', line: 1, endLine: 2 },
+      { fileId: 'file:///a.ts', path: 'src/a.ts', line: 1 },
+    ],
+  );
+  const excerpted = {
+    ...bundle,
+    files: [
+      {
+        ...bundle.files[0],
+        excerpts: [
+          { startLine: 2, endLine: 3, content: 'visible\nvisible' },
+          { startLine: 5, endLine: 6, content: 'visible\nvisible' },
+        ],
+      },
+    ],
+  };
+  assert.deepEqual(
+    aiReferences('[[src/a.ts:L2-L3]] [[src/a.ts:L3-L5]] [[src/a.ts:L1-L3]]', excerpted),
+    [{ fileId: 'file:///a.ts', path: 'src/a.ts', line: 2, endLine: 3 }],
+  );
+});
 test('apply guard rejects any changed or missing context, including unmodified dependency files', () => {
   assert.doesNotThrow(() =>
     assertContextUnchanged(bundle, new Map([['file:///a.ts', bundle.files[0].content]])),

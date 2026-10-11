@@ -168,3 +168,34 @@ test('inline citations transform validated plain text only, never fenced/inline 
   assert.ok(serialized.includes('missing.ts:L1'));
   assert.equal(root.children[1].value, '[[a.ts:L6]]');
 });
+test('range links preserve their label and require an exact host-validated range', () => {
+  const root = {
+    type: 'root',
+    children: [
+      {
+        type: 'paragraph',
+        children: [
+          { type: 'text', value: '[[a.ts:L2-L3]] [[a.ts:L2-3]] [[a.ts:L2]] [[a.ts:L2-L99]]' },
+        ],
+      },
+      { type: 'code', value: '[[a.ts:L2-L3]]' },
+      { type: 'inlineCode', value: '[[a.ts:L2-L3]]' },
+      {
+        type: 'link',
+        url: 'https://example.com',
+        children: [{ type: 'text', value: '[[a.ts:L2-L3]]' }],
+      },
+    ],
+  };
+  linkCitations(root, [
+    { fileId: 'a', path: 'a.ts', line: 2, endLine: 3 },
+    { fileId: 'a', path: 'a.ts', line: 2 },
+  ]);
+  const result = JSON.stringify(root);
+  assert.equal(result.match(/#codemap-citation-0/g)?.length, 2);
+  assert.equal(result.match(/#codemap-citation-1/g)?.length, 1);
+  assert.ok(result.includes('a.ts:2–3'));
+  assert.ok(result.includes('[[a.ts:L2-L99]]'));
+  assert.equal(root.children[1].value, '[[a.ts:L2-L3]]');
+  assert.equal(root.children[2].value, '[[a.ts:L2-L3]]');
+});

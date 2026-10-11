@@ -13,6 +13,7 @@ export function ProposalReview({
   onApply,
   conflict,
   onRegenerate,
+  onSelectionChange,
 }: {
   proposal: AiProposal;
   appliedIds?: string[];
@@ -23,12 +24,16 @@ export function ProposalReview({
   onApply: () => void;
   conflict?: { fileId: string; changeId?: string };
   onRegenerate: () => void;
+  onSelectionChange?: (ids: string[]) => void;
 }) {
   const [accepted, setAccepted] = useState<string[]>([]);
   useEffect(
     () => setAccepted(appliedIds ?? proposal.changes.map((c) => c.id)),
     [proposal.id, appliedIds],
   );
+  const selectionHandler = React.useRef(onSelectionChange);
+  selectionHandler.current = onSelectionChange;
+  useEffect(() => selectionHandler.current?.(accepted), [accepted, reviewed, state]);
   const groups = reviewGroups(proposal.changes, accepted, reviewed);
   const pending = proposal.changes.find(
     (change) => accepted.includes(change.id) && !reviewed.includes(change.id),
@@ -49,6 +54,14 @@ export function ProposalReview({
         in VS Code.
       </p>
       <div className="review-progress" role="status">
+        <button
+          disabled={!accepted.length || applying || state !== 'ready'}
+          onClick={() =>
+            send({ type: 'aiPreviewGraph', proposalId: proposal.id, changeIds: accepted })
+          }
+        >
+          Preview accepted graph
+        </button>
         <span>
           {
             proposal.changes.filter((c) => accepted.includes(c.id) && reviewed.includes(c.id))

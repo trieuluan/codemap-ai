@@ -1,4 +1,5 @@
 import type { AiReference } from './ai';
+import { citationMatches } from './citations';
 interface MarkdownNode {
   type: string;
   value?: string;
@@ -18,9 +19,12 @@ export function linkCitations(tree: unknown, references: AiReference[]) {
       }
       const result: MarkdownNode[] = [];
       let offset = 0;
-      for (const match of child.value.matchAll(/\[\[([^\]\n]+):L(\d+)\]\]/g)) {
+      for (const match of citationMatches(child.value)) {
         const index = references.findIndex(
-          (r) => r.path === match[1] && r.line === Number(match[2]),
+          (r) =>
+            r.path === match[1] &&
+            r.line === Number(match[2]) &&
+            (r.endLine ?? r.line) === Number(match[3] ?? match[2]),
         );
         if (index < 0) {
           continue;
@@ -32,7 +36,7 @@ export function linkCitations(tree: unknown, references: AiReference[]) {
           children: [
             {
               type: 'text',
-              value: `${references[index].path.split('/').at(-1)}:${references[index].line}`,
+              value: `${references[index].path.split('/').at(-1)}:${references[index].line}${references[index].endLine ? `–${references[index].endLine}` : ''}`,
             },
           ],
         });

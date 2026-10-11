@@ -1,0 +1,40 @@
+{
+  "checkedAt": "2026-10-11T19:26:49.815Z",
+  "model": {
+    "id": "auto",
+    "vendor": "copilot",
+    "name": "Auto"
+  },
+  "syntheticSourceOnly": true,
+  "workspaceSourceSent": false,
+  "steps": [
+    {
+      "name": "single: Plan → Generate → in-memory graph → diff → Apply",
+      "status": "passed"
+    },
+    {
+      "name": "multiple: Plan → Generate → in-memory graph → diff → Apply",
+      "status": "passed"
+    },
+    {
+      "name": "test:pass",
+      "status": "passed",
+      "detail": "Observed passed, exit 0"
+    },
+    {
+      "name": "test:repair",
+      "status": "passed",
+      "detail": "Observed failed, exit 1"
+    },
+    {
+      "name": "test:repair",
+      "status": "passed",
+      "detail": "Observed passed, exit 0"
+    },
+    {
+      "name": "report-backed repair Plan → Generate → preview → diff → Apply → test passed",
+      "status": "passed"
+    }
+  ],
+  "status": "passed"
+}

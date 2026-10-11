@@ -4,6 +4,7 @@ import { analyze, ScanCancelled, type SourceInput, AnalyzerCache } from './analy
 import type { GraphSnapshot, GraphWarning } from './shared/model';
 
 export interface ScanOptions {
+  textOverrides?: Map<string, string>;
   cache?: AnalyzerCache;
   sources?: Map<string, SourceInput>;
   changes?: Set<string>;
@@ -85,7 +86,11 @@ export async function scanWorkspace(
         inputs.push(existing);
       } else {
         const document = await vscode.workspace.openTextDocument(uri);
-        inputs.push({ id: uri.toString(), fileName: uri.fsPath, text: document.getText() });
+        inputs.push({
+          id: uri.toString(),
+          fileName: uri.fsPath,
+          text: options.textOverrides?.get(uri.toString()) ?? document.getText(),
+        });
       }
     } catch (error) {
       warnings.push({
@@ -99,6 +104,9 @@ export async function scanWorkspace(
       .filter((document) => document.uri.scheme === 'file')
       .map((document) => [document.uri.fsPath, document.getText()]),
   );
+  for (const [id, text] of options.textOverrides ?? []) {
+    overlays.set(vscode.Uri.parse(id).fsPath, text);
+  }
   options.log?.(`Collect ${inputs.length} files: ${(performance.now() - started).toFixed(1)} ms`);
   const snapshot = await analyze({
     cache: options.cache,

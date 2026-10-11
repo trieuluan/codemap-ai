@@ -2,6 +2,7 @@ import type { AiUiMessage, AiHostMessage } from './ai';
 import type { ContextBundle, ContextOptions } from './context';
 import type { WorkspaceLibrary, Annotation } from './library';
 import type { NavigationLocation } from './navigation';
+import type { WorkingSet } from './working-set';
 export type RelationKind = 'import' | 'type-import' | 're-export' | 'require' | 'dynamic-import';
 export type SymbolKind = 'function' | 'class' | 'type' | 'interface' | 'enum' | 'value';
 export interface SourceSymbol {
@@ -121,6 +122,11 @@ export type HostMessage =
   | { type: 'contextCopied'; rootId: string; requestId: string }
   | { type: 'library'; rootId: string; library: WorkspaceLibrary }
   | { type: 'activeFile'; nodeId?: string; reveal: boolean }
+  | {
+      type: 'fileStatus';
+      rootId: string;
+      files: { id: string; dirty: boolean; errors: number; warnings: number }[];
+    }
   | { type: 'snapshot'; snapshot: GraphSnapshot; viewState?: GraphViewState }
   | { type: 'status'; scanning: boolean; message: string; completed?: number; total?: number }
   | { type: 'empty'; message: string; openFolder: boolean }
@@ -148,6 +154,7 @@ export interface GraphViewState {
   selected?: string;
   autoUpdate: boolean;
   followEditor: boolean;
+  workingSet?: WorkingSet;
 }
 export interface DisplayNode {
   id: string;

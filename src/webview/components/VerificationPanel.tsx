@@ -9,12 +9,16 @@ export function VerificationPanel({
   include,
   onInclude,
   onAction,
+  onRepair,
+  historical = false,
 }: {
   report: VerificationReport;
   error: string;
   include: boolean;
   onInclude: (value: boolean) => void;
   onAction: (action: AiGraphAction) => void;
+  onRepair?: () => void;
+  historical?: boolean;
 }) {
   const running = report.test?.state === 'running';
   const focus = (ids: string[]) =>
@@ -38,8 +42,9 @@ export function VerificationPanel({
       </small>
       {report.stale && (
         <p className="context-warning">
-          Source changed since this report. Ask with fresh context; these observations describe the
-          previous Apply.
+          {historical
+            ? 'Earlier round · kept for reference. Use the latest report to test or prepare a repair.'
+            : 'Source changed since this report. These observations describe the previous Apply.'}
         </p>
       )}
       <div className="ai-verification-stats">
@@ -61,7 +66,7 @@ export function VerificationPanel({
           Show impact
         </button>
       </div>
-      <details>
+      <details open={report.diagnostics.some((d) => d.severity === 'error')}>
         <summary>
           VS Code diagnostics · +{report.addedDiagnostics.length} / −
           {report.removedDiagnostics.length}
@@ -73,9 +78,13 @@ export function VerificationPanel({
         {report.diagnostics.length ? (
           report.diagnostics.map((d, i) => (
             <div className="ai-diagnostic" key={i}>
-              <small>
-                {d.path}:L{d.line} · {d.severity}
-              </small>
+              <button
+                className="quiet-button"
+                disabled={report.stale || historical}
+                onClick={() => send({ type: 'aiOpenDiagnostic', reportId: report.id, index: i })}
+              >
+                {d.path}:L{d.line} · {d.severity} ↗
+              </button>
               <p>{d.message}</p>
             </div>
           ))
@@ -108,7 +117,11 @@ export function VerificationPanel({
           Saving can trigger project save hooks.
         </p>
         <div className="ai-test-actions">
-          {running ? (
+          {historical ? (
+            <p className="helper-text">
+              Historical round; tests and repair are available only for the latest current report.
+            </p>
+          ) : running ? (
             <button onClick={() => send({ type: 'aiStopTest' })}>Stop test</button>
           ) : (
             <>
@@ -127,7 +140,7 @@ export function VerificationPanel({
           </p>
         )}
         {report.test && (
-          <details open={running}>
+          <details open={running || report.test.state === 'failed'}>
             <summary>
               {report.test.name} · {report.test.state}
               {report.test.exitCode !== undefined ? ` (exit ${report.test.exitCode})` : ''}
@@ -138,7 +151,7 @@ export function VerificationPanel({
                 : 'Disk only: unsaved AI edits may not be tested.'}
             </p>
             <pre className="ai-test-output">
-              {report.test.output || 'Waiting for output…'}
+              {report.test.output || (running ? 'Waiting for output…' : 'No output captured.')}
               {report.test.truncated ? '\n… Output truncated at 32,000 characters.' : ''}
             </pre>
           </details>
@@ -148,12 +161,26 @@ export function VerificationPanel({
         <input
           type="checkbox"
           checked={include && !report.stale && !running}
-          disabled={report.stale || running}
+          disabled={report.stale || running || historical}
           onChange={(event) => onInclude(event.target.checked)}
         />
-        Include this report and test output in the next Ask
+        Include this report and test output in the next AI request
       </label>
-      <small>Stays local until you select this option and submit Ask.</small>
+      {onRepair && (
+        <button
+          disabled={
+            report.stale ||
+            historical ||
+            running ||
+            (!report.diagnostics.some((d) => d.severity === 'error') &&
+              report.test?.state !== 'failed')
+          }
+          onClick={onRepair}
+        >
+          Prepare repair plan →
+        </button>
+      )}
+      <small>Stays local until you include it and submit an AI request.</small>
     </section>
   );
 }

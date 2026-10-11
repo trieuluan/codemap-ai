@@ -222,6 +222,99 @@ suite('Range review and post-Apply verification', () => {
       await vscode.workspace.fs.delete(uri);
     }
   });
+  test('verification rounds are bounded, root scoped and navigate only current validated diagnostics', async () => {
+    const root = vscode.workspace.workspaceFolders![0].uri;
+    const uri = vscode.Uri.joinPath(root, 'rounds.ts');
+    await vscode.workspace.fs.writeFile(uri, Buffer.from('export const value = 1;\n'));
+    let graph: GraphSnapshot = {
+      root: { id: root.toString(), name: 'test' },
+      revision: 1,
+      scannedAt: '',
+      warnings: [],
+      edges: [],
+      nodes: [
+        {
+          id: uri.toString(),
+          path: 'rounds.ts',
+          name: 'rounds.ts',
+          language: 'typescript',
+          outside: [],
+        },
+      ],
+    };
+    const events: AiHostMessage[] = [];
+    const service = new Verification(
+      () => graph,
+      (m) => events.push(m),
+    );
+    const diagnostics = vscode.languages.createDiagnosticCollection('CodeMap rounds');
+    try {
+      diagnostics.set(uri, [
+        new vscode.Diagnostic(
+          new vscode.Range(0, 13, 0, 18),
+          'Fixture error',
+          vscode.DiagnosticSeverity.Error,
+        ),
+      ]);
+      for (let i = 0; i < 10; i++) {
+        await service.observe(graph, [], `p${i}`, [uri.toString()], async () => {
+          graph = { ...graph, revision: graph.revision + 1 };
+        });
+      }
+      const history = events.filter((m) => m.type === 'aiVerificationHistory').at(-1);
+      assert.ok(history?.type === 'aiVerificationHistory');
+      assert.equal(history.reports.length, 8);
+      assert.equal(history.reports[0].proposalId, 'p9');
+      assert.equal(history.reports[0].stale, false);
+      assert.ok(history.reports.slice(1).every((r) => r.stale));
+      const current = history.reports[0];
+      const index = current.diagnostics.findIndex((d) => d.message === 'Fixture error');
+      assert.ok(index >= 0);
+      await service.openDiagnostic(current.id, index);
+      const editor = () =>
+        vscode.window.visibleTextEditors.find(
+          (e) => e.document.uri.toString() === uri.toString() && e.selection.start.character === 13,
+        );
+      const deadline = Date.now() + 2000;
+      while (!editor() && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      assert.ok(editor());
+      await service.openDiagnostic(current.id, 100);
+      assert.ok(
+        events.some(
+          (m) => m.type === 'aiVerificationError' && m.message.includes('no longer available'),
+        ),
+      );
+      const document = await vscode.workspace.openTextDocument(uri);
+      const edit = new vscode.WorkspaceEdit();
+      edit.insert(uri, new vscode.Position(0, 0), '// changed\n');
+      await vscode.workspace.applyEdit(edit);
+      await service.openDiagnostic(current.id, index);
+      assert.ok(
+        events.some((m) => m.type === 'aiVerificationError' && m.message.includes('stale')),
+      );
+      // Previously emitted historical data is immutable.
+      assert.equal(current.stale, false);
+      service.reset();
+      events.length = 0;
+      service.publish();
+      assert.equal(events.length, 0);
+      const restore = new vscode.WorkspaceEdit();
+      restore.replace(
+        uri,
+        new vscode.Range(document.positionAt(0), document.positionAt(document.getText().length)),
+        'export const value = 1;\n',
+      );
+      await vscode.workspace.applyEdit(restore);
+      await document.save();
+    } finally {
+      service.dispose();
+      diagnostics.dispose();
+      await vscode.commands.executeCommand('workbench.action.closeAllEditors');
+      await vscode.workspace.fs.delete(uri);
+    }
+  });
   test('user-selected package test tasks report exit codes, bounded logs and cancellation', async function () {
     this.timeout(20000);
     const directory = await mkdtemp(join(tmpdir(), 'codemap-test-task-'));

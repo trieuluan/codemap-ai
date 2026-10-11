@@ -6,9 +6,10 @@ import type { VerificationReport } from '../../shared/verification';
 import type { HostMessage, SyncState } from '../../shared/model';
 import type { PreparedContext } from './useContextPreview';
 import { send } from '../bridge';
+import type { CodingPlan } from '../../shared/ai-plan';
 
 export interface AssistantSessionOptions {
-  prepareContext: (action?: 'ask' | 'propose') => Promise<PreparedContext>;
+  prepareContext: (action?: 'ask' | 'propose' | 'plan') => Promise<PreparedContext>;
   onAction: (action: AiGraphAction) => void;
   regionKey: string;
   conversationKey: string;
@@ -16,7 +17,12 @@ export interface AssistantSessionOptions {
   revision: number;
   fileCount: number;
   sync: SyncState;
-  intent?: { mode: 'ask' | 'propose'; id: string };
+  intent?: {
+    mode: 'ask' | 'propose' | 'plan';
+    id: string;
+    tab?: 'chat' | 'plan' | 'changes' | 'verify' | 'context';
+  };
+  editableFileIds?: string[];
 }
 /** Keeps the request, draft and review session alive while the user switches tabs. */
 export function useAssistantSession({
@@ -29,15 +35,16 @@ export function useAssistantSession({
   fileCount,
   sync,
   intent,
+  editableFileIds,
 }: AssistantSessionOptions) {
-  const [tab, setTab] = useState<'chat' | 'changes' | 'context'>('chat');
+  const [tab, setTab] = useState<'chat' | 'plan' | 'changes' | 'verify' | 'context'>('chat');
   const input = useRef<HTMLTextAreaElement>(null);
   const chatScroll = useRef<HTMLDivElement>(null);
   const followAnswer = useRef(true);
   useEffect(() => {
     if (intent) {
       setMode(intent.mode);
-      setTab('chat');
+      setTab(intent.tab ?? (intent.mode === 'plan' ? 'plan' : 'chat'));
       requestAnimationFrame(() => input.current?.focus());
     }
   }, [intent?.id]);
@@ -66,14 +73,16 @@ export function useAssistantSession({
   const [text, setText] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
-  const [mode, setMode] = useState<'ask' | 'propose'>('ask');
+  const [mode, setMode] = useState<'ask' | 'propose' | 'plan'>('ask');
   const [preparing, setPreparing] = useState(false);
+  const [verificationHistory, setVerificationHistory] = useState<VerificationReport[]>([]);
   const [verification, setVerification] = useState<VerificationReport>();
   const [verificationError, setVerificationError] = useState('');
   const [includeVerification, setIncludeVerification] = useState(false);
   const [appliedIds, setAppliedIds] = useState<string[]>();
   const [proposalState, setProposalState] = useState('ready');
   const [proposal, setProposal] = useState<AiProposal>();
+  const [plan, setPlan] = useState<CodingPlan>();
   const [references, setReferences] = useState<AiReference[]>([]);
   const [reviewed, setReviewed] = useState<string[]>([]);
   const [applying, setApplying] = useState(false);
@@ -83,7 +92,12 @@ export function useAssistantSession({
   useEffect(() => {
     const receive = (event: MessageEvent<HostMessage>) => {
       const value = event.data;
-      if (value.type === 'aiVerification' && value.report.rootId === currentGraph.current.rootId) {
+      if (value.type === 'aiVerificationHistory' && value.rootId === currentGraph.current.rootId) {
+        setVerificationHistory(value.reports);
+      } else if (
+        value.type === 'aiVerification' &&
+        value.report.rootId === currentGraph.current.rootId
+      ) {
         setVerification(value.report);
         if (value.report.stale) {
           setIncludeVerification(false);
@@ -141,6 +155,10 @@ export function useAssistantSession({
             proposalId.current = value.proposal.id;
             setTab('changes');
           }
+          if (value.plan) {
+            setPlan(value.plan);
+            setTab('plan');
+          }
           setReferences(value.references ?? []);
         }
       } else if (value.type === 'aiDiffOpened' && value.proposalId === proposalId.current) {
@@ -151,6 +169,7 @@ export function useAssistantSession({
         setError(value.error ?? '');
         if (!value.error) {
           setProposalState('applied');
+          setTab('verify');
           setText('Changes applied to editor buffers. Review and save them when ready.');
         }
       }
@@ -175,6 +194,7 @@ export function useAssistantSession({
   }, [regionKey]);
   useEffect(() => {
     setProposal(undefined);
+    setPlan(undefined);
     setConflict(undefined);
     proposalId.current = undefined;
     setReviewed([]);
@@ -185,6 +205,7 @@ export function useAssistantSession({
   }, [rootId, conversationKey]);
   useEffect(() => {
     setVerification(undefined);
+    setVerificationHistory([]);
     setIncludeVerification(false);
     setVerificationError('');
     send({ type: 'aiStatus' });
@@ -211,11 +232,14 @@ export function useAssistantSession({
     setPreparing(false);
     setError('Request stopped.');
   };
-  const start = async (action: 'ask' | 'propose') => {
+  const start = async (action: 'ask' | 'propose' | 'plan', planStepIds?: string[]) => {
     const requestId = crypto.randomUUID();
     request.current = requestId;
     proposalId.current = undefined;
-    setTab('chat');
+    setTab(action === 'plan' ? 'plan' : 'chat');
+    if (action === 'plan') {
+      setPlan(undefined);
+    }
     followAnswer.current = true;
     setBusy(true);
     setPreparing(true);
@@ -240,8 +264,15 @@ export function useAssistantSession({
         requestId,
         question,
         mode: action,
-        ...(action === 'ask' &&
-        includeVerification &&
+        ...(action !== 'ask' && editableFileIds
+          ? {
+              editableFileIds: editableFileIds.filter((id) =>
+                prepared.bundle.files.some((f) => f.id === id),
+              ),
+            }
+          : {}),
+        ...(action === 'propose' && plan && planStepIds ? { planId: plan.id, planStepIds } : {}),
+        ...(includeVerification &&
         verification &&
         !verification.stale &&
         verification.test?.state !== 'running'
@@ -258,6 +289,8 @@ export function useAssistantSession({
   };
   return {
     conflict,
+    plan,
+    setPlan,
     tab,
     setTab,
     input,
@@ -285,6 +318,7 @@ export function useAssistantSession({
     setMode,
     preparing,
     verification,
+    verificationHistory,
     verificationError,
     includeVerification,
     setIncludeVerification,

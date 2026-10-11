@@ -5,6 +5,7 @@ import type {
   GraphSnapshot,
   GraphViewState,
 } from './model';
+import { readWorkingSet, reconcileWorkingSet } from './working-set';
 export function defaultView(): GraphViewState {
   return {
     version: 3,
@@ -94,7 +95,7 @@ export function readView(value: unknown): GraphViewState {
   const layouts: GraphViewState['layouts'] = {};
   if (state.version >= 2 && state.layouts && typeof state.layouts === 'object') {
     for (const [key, value] of Object.entries(state.layouts)) {
-      if (/^(files|folders:[1-9]\d*)$/.test(key)) {
+      if (/^(?:workspace:)?(files|folders:[1-9]\d*)$/.test(key)) {
         layouts[key] = readLayout(value);
       }
     }
@@ -135,6 +136,7 @@ export function readView(value: unknown): GraphViewState {
     autoUpdate: state.autoUpdate,
     version: 3,
     followEditor: state.followEditor === true,
+    workingSet: readWorkingSet(state.workingSet),
     layouts,
     selected: typeof state.selected === 'string' ? state.selected : undefined,
     ...active,
@@ -176,11 +178,19 @@ export function reconcileView(state: GraphViewState, graph: GraphSnapshot): Grap
   const prune = (layout: GraphLayoutState): GraphLayoutState => ({
     ...layout,
     positions: Object.fromEntries(
-      Object.entries(layout.positions).filter(([id]) => ids.has(id) || groupIds.has(id)),
+      Object.entries(layout.positions).filter(
+        ([id]) =>
+          ids.has(id) ||
+          groupIds.has(id) ||
+          (state.workingSet &&
+            id.startsWith('boundary:') &&
+            (id === 'boundary:.' || folders.has(id.slice(9)))),
+      ),
     ),
   });
   const reconciled = {
     ...state,
+    workingSet: state.workingSet ? reconcileWorkingSet(state.workingSet, graph) : undefined,
     selected,
     focus: selected && ids.has(selected) ? state.focus : 0,
     folder: folders.has(state.folder) ? state.folder : '',

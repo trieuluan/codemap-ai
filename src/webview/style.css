@@ -426,3 +426,95 @@ textarea {
 .architecture-text {
   white-space: pre-wrap;
 }
+
+/* Keep workspace identity and primary actions stable when the panel narrows. */
+.graph-toolbar {
+  display: grid;
+  grid-template-columns: minmax(110px, 0.7fr) minmax(160px, 1fr) auto;
+  gap: 8px 14px;
+  padding: 8px 14px;
+}
+.graph-toolbar .brand {
+  min-width: 0;
+  margin: 0;
+  gap: 8px;
+}
+.graph-toolbar .brand span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.graph-navigation {
+  grid-row: 2;
+  grid-column: 1 / -1;
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+}
+.graph-navigation button,
+.graph-actions button {
+  white-space: nowrap;
+}
+.graph-toolbar .search {
+  min-width: 0;
+  width: 100%;
+  max-width: none;
+}
+.graph-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.graph-more {
+  position: relative;
+}
+.graph-more > summary {
+  cursor: pointer;
+  padding: 6px 10px;
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: 4px;
+  list-style: none;
+}
+.graph-more > summary::-webkit-details-marker {
+  display: none;
+}
+.graph-more-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 30;
+  display: grid;
+  min-width: 180px;
+  padding: 6px;
+  gap: 4px;
+  background: var(--vscode-editorWidget-background);
+  border: 1px solid var(--vscode-panel-border);
+  box-shadow: 0 6px 20px #0004;
+  border-radius: 6px;
+}
+.graph-more-menu button {
+  text-align: left;
+}
+textarea,
+select {
+  font: inherit;
+}
+textarea:focus-visible,
+select:focus-visible,
+summary:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: 2px;
+}
+@media (max-width: 700px) {
+  .graph-toolbar {
+    grid-template-columns: minmax(100px, 1fr) auto;
+    gap: 6px;
+  }
+  .graph-toolbar .search {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+  .graph-navigation {
+    grid-row: 3;
+  }
+}

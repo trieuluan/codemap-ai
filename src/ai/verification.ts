@@ -11,11 +11,11 @@ import {
 import type { AiHostMessage } from '../shared/ai';
 import { TestRunner } from './test-runner';
 
-/** Observations remain local unless a subsequent Ask explicitly includes this report. */
+/** Observations remain local unless a subsequent AI request explicitly includes this report. */
 export class Verification implements vscode.Disposable {
   private report?: VerificationReport;
+  private history: VerificationReport[] = [];
   private baseline?: { graph: GraphSnapshot; diagnostics: ObservedDiagnostic[] };
-  private runner = new TestRunner();
   private disposed = false;
   private running = false;
   private sourceRevision = 0;
@@ -24,6 +24,7 @@ export class Verification implements vscode.Disposable {
   constructor(
     private graph: () => GraphSnapshot | undefined,
     private post: (message: AiHostMessage) => void,
+    private runner = new TestRunner(),
   ) {
     this.listeners = [
       vscode.workspace.onDidChangeTextDocument((event) => {
@@ -134,7 +135,16 @@ export class Verification implements vscode.Disposable {
     if (this.graph()?.revision !== this.report.revision) {
       this.report.stale = true;
     }
-    this.post({ type: 'aiVerification', report: { ...this.report } });
+    this.history = [
+      structuredClone(this.report),
+      ...this.history.filter((r) => r.id !== this.report!.id).map((r) => ({ ...r, stale: true })),
+    ].slice(0, 8);
+    this.post({ type: 'aiVerification', report: structuredClone(this.report) });
+    this.post({
+      type: 'aiVerificationHistory',
+      rootId: this.report.rootId,
+      reports: structuredClone(this.history),
+    });
   }
   context(id: string, rootId: string) {
     this.publish();
@@ -150,6 +160,37 @@ export class Verification implements vscode.Disposable {
       );
     }
     return verificationContext(this.report);
+  }
+  async openDiagnostic(id: string, index: number) {
+    try {
+      this.context(id, this.graph()?.root.id ?? '');
+      const report = this.report!;
+      const diagnostic =
+        Number.isInteger(index) && index >= 0 ? report.diagnostics[index] : undefined;
+      if (!diagnostic || !this.graph()?.nodes.some((n) => n.id === diagnostic.fileId)) {
+        throw new Error('Diagnostic no longer available.');
+      }
+      const document = await vscode.workspace.openTextDocument(vscode.Uri.parse(diagnostic.fileId));
+      if (this.report !== report || report.stale || this.graph()?.revision !== report.revision) {
+        throw new Error('Diagnostic source changed.');
+      }
+      if (
+        diagnostic.line < 1 ||
+        diagnostic.line > document.lineCount ||
+        diagnostic.character < 0 ||
+        diagnostic.character > document.lineAt(diagnostic.line - 1).text.length
+      ) {
+        throw new Error('Diagnostic position no longer available.');
+      }
+      const position = new vscode.Position(diagnostic.line - 1, diagnostic.character);
+      await vscode.window.showTextDocument(document, {
+        viewColumn: vscode.ViewColumn.Beside,
+        selection: new vscode.Range(position, position),
+        preview: true,
+      });
+    } catch (error) {
+      this.post({ type: 'aiVerificationError', reportId: id, message: String(error) });
+    }
   }
   async test(id: string, save: boolean) {
     const report = this.report;
@@ -202,6 +243,7 @@ export class Verification implements vscode.Disposable {
     this.generation++;
     this.runner.stop();
     this.report = undefined;
+    this.history = [];
     this.baseline = undefined;
   }
   dispose() {

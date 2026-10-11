@@ -118,6 +118,7 @@ aside.assistant-panel {
 .assistant-chat {
   display: flex;
   flex-direction: column;
+  overflow: auto;
 }
 .assistant-context-strip {
   display: flex;
@@ -157,7 +158,7 @@ aside.assistant-panel {
 }
 .assistant-chat-scroll {
   flex: 1;
-  min-height: 60px;
+  min-height: 0;
   overflow: auto;
   padding: 16px 18px;
   scrollbar-gutter: stable;
@@ -374,4 +375,441 @@ aside.assistant-panel {
   overflow: auto;
   flex-shrink: 0;
   border-top: 1px solid var(--vscode-panel-border);
+}
+
+.working-set {
+  border-bottom: 1px solid var(--vscode-panel-border);
+  background: var(--vscode-sideBar-background);
+  padding: 10px 14px;
+}
+.task-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.task-toolbar input {
+  max-width: 220px;
+}
+.task-toolbar > span:not(.eyebrow),
+.task-toolbar small {
+  color: var(--vscode-descriptionForeground);
+  font-size: 11px;
+}
+.working-set details {
+  margin: 8px 0;
+}
+.task-file-list {
+  max-height: 220px;
+  overflow: auto;
+  display: grid;
+  gap: 4px;
+}
+.task-file-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 5px 0;
+  border-bottom: 1px solid var(--vscode-panel-border);
+}
+.task-file-row > button:first-child {
+  flex: 1;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.task-file-row label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+  font-size: 11px;
+}
+.node-badges {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  margin-top: 5px;
+}
+.node-badges span {
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-size: 10px;
+}
+.node-review {
+  font-size: 10px;
+  margin-top: 5px;
+}
+.coding-plan {
+  border-top: 1px solid var(--vscode-panel-border);
+  padding-top: 12px;
+  margin-top: 12px;
+}
+.plan-step {
+  padding: 10px;
+  margin: 8px 0;
+  background: var(--vscode-editor-background);
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: 8px;
+}
+.plan-step label {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+.plan-step label span {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.plan-step small {
+  color: var(--vscode-descriptionForeground);
+}
+.review-map-toolbar {
+  flex-wrap: wrap;
+}
+.review-map-toolbar button[aria-pressed='true'] {
+  outline: 1px solid var(--vscode-focusBorder);
+}
+.task-file-row input[type='checkbox'],
+.plan-step input[type='checkbox'] {
+  width: auto;
+  flex: 0 0 auto;
+  padding: 0;
+}
+.task-file-row label {
+  cursor: pointer;
+}
+.assistant-plan {
+  overflow: auto;
+  padding: 16px 18px;
+}
+
+.assistant-model-error {
+  flex-shrink: 0;
+  max-height: 140px;
+  overflow: auto;
+  margin: 8px 14px;
+  padding: 10px;
+  border: 1px solid var(--vscode-inputValidation-warningBorder, var(--vscode-focusBorder));
+  border-radius: 6px;
+}
+.assistant-model-error p {
+  margin: 0 0 8px;
+}
+
+.task-stages {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+}
+.task-stages button {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  background: transparent;
+  border: 1px solid var(--vscode-panel-border);
+}
+.task-stages button[aria-current='step'] {
+  border-color: var(--vscode-focusBorder);
+  background: color-mix(in srgb, var(--vscode-focusBorder) 12%, transparent);
+}
+.task-stages button span {
+  opacity: 0.6;
+  font-size: 10px;
+}
+.task-stages small {
+  color: var(--vscode-descriptionForeground);
+  margin-left: 8px;
+}
+.task-more-actions {
+  margin-top: 8px;
+}
+.context-suggestions {
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--vscode-panel-border);
+}
+.context-suggestion {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 12px 0;
+}
+.context-suggestion input {
+  width: auto;
+  flex: 0 0 auto;
+}
+.context-suggestion span {
+  min-width: 0;
+}
+.context-suggestion strong {
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+.context-suggestion small {
+  display: block;
+  margin-top: 4px;
+  line-height: 1.5;
+  color: var(--vscode-descriptionForeground);
+}
+.suggested-context-link {
+  margin: 6px 18px 0;
+  text-align: left;
+  background: transparent;
+  color: var(--vscode-textLink-foreground);
+  font-size: 11px;
+  flex-shrink: 0;
+}
+.verification-rounds {
+  display: block;
+  margin: 14px 18px;
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground);
+}
+.verification-rounds select {
+  width: 100%;
+  margin-top: 8px;
+}
+.repair-context {
+  margin: 14px 18px;
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: 6px;
+  padding: 12px;
+}
+.repair-context pre {
+  max-height: 240px;
+  overflow: auto;
+  font-size: 10px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* Avoid nested padding and keep five labels readable in a narrow inspector. */
+.assistant-tabs button {
+  min-width: 0;
+  padding: 10px 5px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+.assistant-tabs button span {
+  flex: 0 0 auto;
+}
+.assistant-context .context-suggestions {
+  padding: 0 0 14px;
+  margin-bottom: 16px;
+}
+.assistant-context .repair-context {
+  margin: 16px 0 0;
+}
+.assistant-changes .verification-rounds {
+  margin: 0 0 14px;
+}
+.verification-rounds select {
+  min-width: 0;
+  max-width: 100%;
+  text-overflow: ellipsis;
+}
+.assistant-request-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 18px;
+  background: var(--vscode-editor-background);
+  border-top: 1px solid var(--vscode-panel-border);
+  font-size: 11px;
+  flex-shrink: 0;
+}
+.assistant-global-error {
+  margin: 6px 18px;
+  max-height: 100px;
+  overflow: auto;
+  flex-shrink: 0;
+}
+.task-file-row > button:first-child {
+  min-width: 0;
+  white-space: nowrap;
+}
+.task-file-list {
+  overflow-x: auto;
+}
+.task-file-row {
+  min-width: 480px;
+}
+.task-toolbar > input {
+  min-width: 100px;
+  flex: 1;
+}
+.task-stages small {
+  flex: 1;
+  min-width: 160px;
+}
+@media (max-height: 700px) {
+  .assistant-panel > .inspector-heading {
+    padding-top: 10px;
+    padding-bottom: 6px;
+  }
+  .assistant-model-row {
+    padding-bottom: 8px;
+  }
+  .assistant-empty {
+    min-height: 100px;
+    padding: 14px 4px;
+  }
+  .assistant-empty > span {
+    font-size: 20px;
+  }
+  .assistant-composer-dock {
+    max-height: 65%;
+    padding: 8px 14px;
+  }
+  .assistant-chat-scroll {
+    padding-top: 10px;
+    padding-bottom: 10px;
+  }
+}
+
+.working-set {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  column-gap: 16px;
+}
+.working-set > .task-toolbar {
+  grid-column: 1 / -1;
+}
+.working-set > details:not(.task-more-actions) {
+  grid-column: 1;
+  grid-row: 2;
+}
+.working-set > .task-more-actions {
+  grid-column: 2;
+  grid-row: 2;
+}
+.working-set > details[open] {
+  grid-column: 1 / -1;
+}
+.working-set > .task-more-actions[open] {
+  grid-row: 4;
+}
+.working-set > details[open] ~ .task-more-actions:not([open]) {
+  grid-row: 4;
+}
+.working-set > .task-stages {
+  grid-column: 1 / -1;
+  margin-top: 0;
+}
+.assistant-workspace {
+  container-type: size;
+}
+@container (max-height: 460px) {
+  .assistant-chat {
+    overflow: hidden;
+  }
+  .assistant-context-strip {
+    margin: 6px 14px;
+    padding: 6px 10px;
+  }
+  .assistant-context-strip small {
+    display: none;
+  }
+  .suggested-context-link {
+    display: none;
+  }
+  .assistant-source-meta {
+    padding: 4px 14px 0;
+    max-height: 28px;
+  }
+  .assistant-source-meta .assistant-source-summary {
+    margin-bottom: 0;
+  }
+  .assistant-composer-dock {
+    max-height: none;
+    padding: 6px 14px;
+    overflow: auto;
+  }
+  .assistant-composer-dock textarea {
+    min-height: 48px;
+    height: 64px;
+    max-height: 100px;
+  }
+  .assistant-composer-dock .ai-disclosure:not(.submit-blocked),
+  .assistant-composer-dock > .helper-text,
+  .assistant-history-note {
+    display: none;
+  }
+  .assistant-empty {
+    min-height: 90px;
+    padding: 12px 0;
+  }
+}
+@container (max-height: 460px) {
+  .assistant-source-meta {
+    max-height: 34px;
+  }
+  .assistant-empty {
+    min-height: 0;
+    padding: 4px 0;
+    gap: 4px;
+    justify-content: flex-start;
+  }
+  .assistant-empty > span,
+  .assistant-empty .ai-suggestions {
+    display: none;
+  }
+}
+@container (max-height: 330px) {
+  .assistant-chat .assistant-context-strip,
+  .assistant-chat .assistant-source-meta,
+  .assistant-chat.is-plan-draft .assistant-chat-scroll {
+    display: none;
+  }
+  .assistant-composer-dock {
+    flex: 1 1 auto;
+    min-height: 0;
+    padding: 4px 12px;
+  }
+  .assistant-composer {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    min-height: 0;
+  }
+  .assistant-composer textarea {
+    flex: 1 1 auto;
+    height: auto;
+    min-height: 40px;
+    resize: none;
+  }
+  .assistant-composer .ai-mode-tabs,
+  .assistant-composer .ai-composer-footer {
+    flex-shrink: 0;
+  }
+  .assistant-composer .ai-composer-footer {
+    padding-top: 4px;
+    padding-bottom: 6px;
+  }
+  .assistant-chat:not(.is-plan-draft) .assistant-composer-dock {
+    flex: 0 1 150px;
+    min-height: 115px;
+  }
+}
+@media (max-width: 1000px) {
+  .review-map-toolbar > span,
+  .review-map-toolbar > small {
+    display: none;
+  }
+}
+.assistant-chat.is-plan-draft .assistant-empty {
+  min-height: 0;
+  padding: 8px 0;
+}
+.assistant-chat.is-plan-draft .assistant-empty > span {
+  display: none;
 }

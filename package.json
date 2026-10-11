@@ -28,6 +28,10 @@
       {
         "command": "codemap-ai.testConnection",
         "title": "CodeMap: Test AI Connection"
+      },
+      {
+        "command": "codemap-ai.checkWorkflow",
+        "title": "CodeMap: Run AI Workflow Check"
       }
     ],
     "configuration": {

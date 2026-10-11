@@ -170,6 +170,53 @@ test('malformed/multiple/oversized action blocks never produce executable sugges
   );
   assert.equal(readAiMessage({ type: 'aiExecuteAction', rootId: 'root', actionId: 2 }), undefined);
 });
+test('live follow-up JSON action fences use the same graph validation as explicit action fences', () => {
+  const actions = [{ kind: 'focus', paths: ['src/a.ts'], reason: 'Confirm the implementation.' }];
+  const text = output(actions).replace('```codemap-actions', '```json');
+  assert.deepEqual(
+    parseAiActions(text, graph, catalog),
+    parseAiActions(output(actions), graph, catalog),
+  );
+  const unknown = parseAiActions(
+    output([{ kind: 'inspect', path: '../secret.ts', reason: 'Unknown file' }]).replace(
+      '```codemap-actions',
+      '```json',
+    ),
+    graph,
+    catalog,
+  );
+  assert.equal(unknown.actions.length, 0);
+  assert.equal(unknown.warnings.length, 1);
+  assert.equal(unknown.answer, '## Answer\n\nEvidence.');
+  const oversized = parseAiActions(
+    output(Array(9).fill(actions[0])).replace('```codemap-actions', '```json'),
+    graph,
+    catalog,
+  );
+  assert.equal(oversized.actions.length, 0);
+  assert.ok(oversized.warnings.length);
+});
+test('ordinary JSON, malformed data and non-trailing examples stay untouched', () => {
+  const actionExample = output([{ kind: 'focus', paths: ['src/a.ts'], reason: 'Example' }]).replace(
+    '```codemap-actions',
+    '```json',
+  );
+  for (const text of [
+    '```json\n{"name":"demo"}\n```',
+    '```json\n[{"kind":"event","reason":"example"}]\n```',
+    '```json\n[{"kind":"focus","paths":["src/a.ts"]}]\n```',
+    '```json\ninvalid\n```',
+    actionExample + '\nThis is an example, not a suggestion.',
+  ]) {
+    const parsed = parseAiActions(text, graph, catalog);
+    assert.equal(parsed.answer, text);
+    assert.deepEqual(parsed.actions, []);
+  }
+  const mixed = '```json\n{"example":1}\n```\n\n' + actionExample;
+  const parsed = parseAiActions(mixed, graph, catalog);
+  assert.equal(parsed.actions.length, 1);
+  assert.ok(parsed.answer.includes('{"example":1}'));
+});
 test('actions expire when an import route, symbol or file disappears', () => {
   const parsed = parseAiActions(
     output([

@@ -77,3 +77,16 @@ export function verificationContext(report: VerificationReport) {
     '\nEND UNTRUSTED VERIFICATION'
   );
 }
+
+/** Test failures identify an edit scope, not a proven failing source file. */
+export function verificationFailureScope(report: VerificationReport | undefined) {
+  if (!report || report.stale) {
+    return { diagnostics: new Set<string>(), testScope: new Set<string>() };
+  }
+  return {
+    diagnostics: new Set(
+      report.diagnostics.filter((d) => d.severity === 'error').map((d) => d.fileId),
+    ),
+    testScope: new Set(report.test?.state === 'failed' ? report.changedFiles.map((f) => f.id) : []),
+  };
+}

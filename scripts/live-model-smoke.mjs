@@ -1,11 +1,16 @@
 import { runTests } from '@vscode/test-electron';
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, mkdirSync } from 'node:fs';
 import { tmpdir, homedir } from 'node:os';
 import { resolve, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 const root = fileURLToPath(new URL('../', import.meta.url));
 const session = mkdtempSync(join(tmpdir(), 'codemap-live-model-'));
 const report = join(session, 'report.json');
+const workflow = process.argv.includes('--workflow');
+const workspace = join(session, 'workspace');
+if (workflow) {
+  mkdirSync(workspace);
+}
 await runTests({
   version: '1.141.0',
   extensionDevelopmentPath: root,
@@ -18,6 +23,7 @@ await runTests({
       : {}),
   },
   launchArgs: [
+    ...(workflow ? [workspace] : []),
     '--new-window',
     '--skip-welcome',
     '--user-data-dir',

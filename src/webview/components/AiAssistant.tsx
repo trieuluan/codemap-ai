@@ -1,3 +1,6 @@
+import { suggestContext } from '../../shared/context-suggestions';
+import { ContextSuggestions } from './ContextSuggestions';
+import type { GraphSnapshot } from '../../shared/model';
 import { SourceSummary } from './SourceSummary';
 import type { ContextBundle } from '../../shared/context';
 import { ProposalReview } from './ProposalReview';
@@ -6,14 +9,19 @@ import { AiActions } from './AiActions';
 import type { AiGraphAction } from '../../shared/ai-actions';
 import { AiMarkdown } from './AiMarkdown';
 import type { PreparedContext } from '../hooks/useContextPreview';
-import React from 'react';
+import React, { useMemo, useState, useEffect } from 'react';
 import { useAssistantSession } from '../hooks/useAssistantSession';
 import type { AiReference } from '../../shared/ai';
 import type { SyncState } from '../../shared/model';
 import { send } from '../bridge';
+import { CodingPlanReview } from './CodingPlanReview';
+import type { ReviewState } from '../../shared/review-graph';
 
 export function AiAssistant({
   prepareContext,
+  graph,
+  sourceIds,
+  onAddSource,
   onAction,
   regionKey,
   conversationKey,
@@ -26,13 +34,26 @@ export function AiAssistant({
   contextWarning,
   contextBundle,
   intent,
+  editableFileIds,
+  onReview,
+  onNavigate,
 }: {
+  graph: GraphSnapshot;
+  sourceIds: string[];
+  onAddSource: (ids: string[]) => void;
   contextBundle?: ContextBundle;
+  editableFileIds?: string[];
+  onReview?: (state: ReviewState) => void;
+  onNavigate?: (stage: 'explore' | 'plan' | 'review' | 'verify') => void;
   contextContent?: React.ReactNode;
   contextSummary?: string;
   contextWarning?: string;
-  intent?: { mode: 'ask' | 'propose'; id: string };
-  prepareContext: (action?: 'ask' | 'propose') => Promise<PreparedContext>;
+  intent?: {
+    mode: 'ask' | 'propose' | 'plan';
+    id: string;
+    tab?: 'chat' | 'plan' | 'changes' | 'verify' | 'context';
+  };
+  prepareContext: (action?: 'ask' | 'propose' | 'plan') => Promise<PreparedContext>;
   onAction: (action: AiGraphAction) => void;
   regionKey: string;
   conversationKey: string;
@@ -42,6 +63,8 @@ export function AiAssistant({
   sync: SyncState;
 }) {
   const {
+    plan,
+    setPlan,
     conflict,
     tab,
     setTab,
@@ -70,6 +93,7 @@ export function AiAssistant({
     setMode,
     preparing,
     verification,
+    verificationHistory,
     verificationError,
     includeVerification,
     setIncludeVerification,
@@ -96,7 +120,39 @@ export function AiAssistant({
     fileCount,
     sync,
     intent,
+    editableFileIds,
   });
+  const [roundId, setRoundId] = useState<string>();
+  useEffect(() => setRoundId(undefined), [verification?.id]);
+  const round = verificationHistory.find((r) => r.id === roundId) ?? verification;
+  const historicalRound = !!round && round.id !== verification?.id;
+  const planDraft = tab === 'plan' && !plan;
+  const canEdit = editableFileIds === undefined || editableFileIds.length > 0;
+  const submitBlocked = !fileCount
+    ? 'Add source files in Context to begin.'
+    : sync !== 'up-to-date'
+      ? 'Refresh or wait for graph synchronization.'
+      : !model && !configuredId
+        ? 'Choose an AI model to continue.'
+        : mode !== 'ask' && !canEdit
+          ? 'Allow edits to at least one source file in Scope & permissions.'
+          : undefined;
+  const navigateTab = (next: typeof tab) => {
+    setTab(next);
+    if (next !== 'context') {
+      onNavigate?.(next === 'chat' ? 'explore' : next === 'changes' ? 'review' : next);
+    }
+    if (next === 'chat') {
+      setMode('ask');
+    }
+    if (next === 'plan') {
+      setMode('plan');
+    }
+  };
+  const suggestions = useMemo(
+    () => suggestContext(graph, sourceIds, question),
+    [graph, sourceIds.join(), question],
+  );
   return (
     <section className="ai-assistant assistant-workspace" aria-label="CodeMap AI">
       <div className="assistant-model-row">
@@ -135,16 +191,36 @@ export function AiAssistant({
                 {connection.message}
               </p>
             )}
-            {modelError && (
-              <p role="alert" className="context-warning">
-                {modelError}
-              </p>
-            )}
           </div>
         </details>
       </div>
+      {modelError && (
+        <div role="alert" className="context-warning assistant-model-error">
+          <p>{modelError}</p>
+          <button disabled={busy || applying} onClick={() => send({ type: 'aiChooseModel' })}>
+            Choose another model
+          </button>
+        </div>
+      )}
+      {(busy || applying) && (
+        <div className="assistant-request-status" role="status">
+          <span>
+            {applying
+              ? 'Applying reviewed edits…'
+              : preparing
+                ? 'Preparing source…'
+                : 'AI is responding…'}
+          </span>
+          {busy && tab !== 'chat' && !planDraft && <button onClick={stop}>Stop</button>}
+        </div>
+      )}
+      {error && !modelError && tab !== 'chat' && !planDraft && (
+        <p className="context-warning assistant-global-error" role="alert">
+          {error}
+        </p>
+      )}
       <div className="assistant-tabs" role="tablist" aria-label="Assistant sections">
-        {(['chat', 'changes', 'context'] as const).map((id) => (
+        {(['chat', 'plan', 'changes', 'verify', 'context'] as const).map((id) => (
           <button
             key={id}
             id={`assistant-tab-${id}`}
@@ -152,15 +228,15 @@ export function AiAssistant({
             aria-selected={tab === id}
             aria-controls={`assistant-page-${id}`}
             tabIndex={tab === id ? 0 : -1}
-            onClick={() => setTab(id)}
+            onClick={() => navigateTab(id)}
             onKeyDown={(event) => {
-              const ids = ['chat', 'changes', 'context'] as const;
+              const ids = ['chat', 'plan', 'changes', 'verify', 'context'] as const;
               const index = ids.indexOf(id);
               const next =
                 event.key === 'ArrowRight'
-                  ? ids[(index + 1) % 3]
+                  ? ids[(index + 1) % ids.length]
                   : event.key === 'ArrowLeft'
-                    ? ids[(index + 2) % 3]
+                    ? ids[(index + ids.length - 1) % ids.length]
                     : event.key === 'Home'
                       ? 'chat'
                       : event.key === 'End'
@@ -168,24 +244,40 @@ export function AiAssistant({
                         : undefined;
               if (next) {
                 event.preventDefault();
-                setTab(next);
+                navigateTab(next);
                 document.getElementById(`assistant-tab-${next}`)?.focus();
               }
             }}
           >
-            {id === 'chat' ? 'Chat' : id === 'changes' ? 'Changes' : 'Context'}
-            {id !== 'chat' && (
-              <span>{id === 'changes' ? (proposal?.changes.length ?? 0) : fileCount}</span>
+            {id === 'chat'
+              ? 'Explore'
+              : id === 'plan'
+                ? 'Plan'
+                : id === 'changes'
+                  ? 'Review'
+                  : id === 'verify'
+                    ? 'Verify'
+                    : 'Context'}
+            {((id === 'context' && fileCount > 0) ||
+              (id === 'plan' && !!plan?.steps.length) ||
+              (id === 'changes' && !!proposal?.changes.length)) && (
+              <span>
+                {id === 'changes'
+                  ? (proposal?.changes.length ?? 0)
+                  : id === 'plan'
+                    ? (plan?.steps.length ?? 0)
+                    : fileCount}
+              </span>
             )}
           </button>
         ))}
       </div>
       <div
-        className="assistant-page assistant-chat"
-        id="assistant-page-chat"
+        className={`assistant-page assistant-chat${planDraft ? ' is-plan-draft' : ''}`}
+        id={planDraft ? 'assistant-page-plan' : 'assistant-page-chat'}
         role="tabpanel"
-        aria-labelledby="assistant-tab-chat"
-        hidden={tab !== 'chat'}
+        aria-labelledby={planDraft ? 'assistant-tab-plan' : 'assistant-tab-chat'}
+        hidden={tab !== 'chat' && !planDraft}
       >
         <button className="assistant-context-strip" onClick={() => setTab('context')}>
           <span>
@@ -194,6 +286,11 @@ export function AiAssistant({
           </span>
           <span>Manage →</span>
         </button>
+        {!!suggestions.length && (
+          <button className="suggested-context-link" onClick={() => setTab('context')}>
+            Review suggested context · {suggestions.length}
+          </button>
+        )}
         <div
           className="assistant-chat-scroll"
           ref={chatScroll}
@@ -202,7 +299,8 @@ export function AiAssistant({
             followAnswer.current = node.scrollHeight - node.scrollTop - node.clientHeight < 64;
           }}
         >
-          {!question && !text && !busy && !turns.length && (
+          {((planDraft && !question && !busy) ||
+            (!question && !text && !busy && !turns.length)) && (
             <div className="assistant-empty">
               <span aria-hidden="true">✦</span>
               <h3>
@@ -210,19 +308,25 @@ export function AiAssistant({
                   ? 'Start with a file'
                   : mode === 'propose'
                     ? 'Describe the change'
-                    : 'Explore your selected source'}
+                    : mode === 'plan'
+                      ? 'Plan a source change'
+                      : 'Explore your selected source'}
               </h3>
               <p>
                 {fileCount
                   ? mode === 'propose'
                     ? 'Explain what should change. Review each proposed edit before applying it.'
-                    : 'Ask how it works or find a potential issue.'
+                    : mode === 'plan'
+                      ? 'Describe the goal. Review file-level read and edit steps before generating code.'
+                      : 'Ask how it works or find a potential issue.'
                   : 'Select a node on the graph or add files in Context.'}
               </p>
               <div className="ai-suggestions">
                 {(mode === 'propose'
                   ? ['Improve readability without changing behavior', 'Fix a potential bug']
-                  : ['Explain this region', 'Find potential issues']
+                  : mode === 'plan'
+                    ? ['Plan a focused refactor', 'Plan a bug fix with tests']
+                    : ['Explain this region', 'Find potential issues']
                 ).map((prompt) => (
                   <button
                     key={prompt}
@@ -237,12 +341,8 @@ export function AiAssistant({
               </div>
             </div>
           )}
-          {error && (
-            <p role="alert" className="context-warning">
-              {error}
-            </p>
-          )}
-          {!!turns.length && (
+
+          {!planDraft && !!turns.length && (
             <div className="ai-thread">
               <div className="section-toolbar">
                 <span className="eyebrow">Conversation · {turns.length} turns</span>
@@ -277,7 +377,11 @@ export function AiAssistant({
                     <div className="ai-user-question">{turn.question}</div>
                     <div className="ai-answer-heading">
                       <span>✦ {turn.model || 'Assistant'}</span>
-                      <button className="quiet-button" onClick={() => copy(turn.answer)}>
+                      <button
+                        className="quiet-button"
+                        disabled={!turn.answer.trim()}
+                        onClick={() => copy(turn.answer)}
+                      >
                         {copied === turn.id ? 'Copied' : 'Copy'}
                       </button>
                     </div>
@@ -287,6 +391,12 @@ export function AiAssistant({
                       </p>
                     )}
                     {turn.error && <p className="context-warning">{turn.error}</p>}
+                    {!turn.answer.trim() && !turn.error && (
+                      <p className="context-warning">
+                        No text was returned for this earlier request. Choose another model and
+                        retry.
+                      </p>
+                    )}
                     <AiMarkdown
                       text={turn.answer}
                       references={turn.references}
@@ -314,7 +424,7 @@ export function AiAssistant({
               })}
             </div>
           )}
-          {text && !turns.some((turn) => turn.id === request.current) && (
+          {!planDraft && text && !turns.some((turn) => turn.id === request.current) && (
             <div className="ai-answer" aria-label="AI response">
               <div className="ai-answer-heading">
                 <span>✦ {proposal ? 'Suggested change' : 'Assistant'}</span>
@@ -323,33 +433,36 @@ export function AiAssistant({
               <AiMarkdown text={text} />
             </div>
           )}
-          {!!references.length && !turns.some((turn) => turn.id === request.current) && (
-            <div className="ai-citations">
-              <span className="eyebrow">Source references</span>
-              {references.map((ref) => (
-                <button
-                  key={`${ref.fileId}:${ref.line}`}
-                  onClick={() =>
-                    send({
-                      type: 'aiOpenReference',
-                      requestId: request.current!,
-                      fileId: ref.fileId,
-                      line: ref.line,
-                    })
-                  }
-                >
-                  {ref.path} · L{ref.line}
-                </button>
-              ))}
-            </div>
-          )}
+          {!planDraft &&
+            !!references.length &&
+            !turns.some((turn) => turn.id === request.current) && (
+              <div className="ai-citations">
+                <span className="eyebrow">Source references</span>
+                {references.map((ref) => (
+                  <button
+                    key={`${ref.fileId}:${ref.line}:${ref.endLine ?? ref.line}`}
+                    onClick={() =>
+                      send({
+                        type: 'aiOpenReference',
+                        requestId: request.current!,
+                        fileId: ref.fileId,
+                        line: ref.line,
+                      })
+                    }
+                  >
+                    {ref.path} · L{ref.line}
+                    {ref.endLine ? `–L${ref.endLine}` : ''}
+                  </button>
+                ))}
+              </div>
+            )}
         </div>
         <div className="assistant-source-meta">
           <SourceSummary
             fileCount={fileCount}
             bundle={contextBundle}
             regionKey={regionKey}
-            mode={mode}
+            mode={mode === 'plan' ? 'propose' : mode}
             ready={ready}
             busy={busy || applying}
             prepare={prepareContext}
@@ -357,7 +470,12 @@ export function AiAssistant({
           />
         </div>
         <div className="assistant-composer-dock">
-          {!!turns.length && (
+          {error && !modelError && (
+            <p role="alert" className="context-warning">
+              {error}
+            </p>
+          )}
+          {!planDraft && !!turns.length && (
             <p className="assistant-history-note">
               Follow-ups use the current files/symbol region above. Earlier answers may refer to
               older source.
@@ -368,14 +486,29 @@ export function AiAssistant({
               <button
                 aria-pressed={mode === 'ask'}
                 disabled={busy || applying}
-                onClick={() => setMode('ask')}
+                onClick={() => {
+                  navigateTab('chat');
+                }}
               >
                 Ask
               </button>
               <button
+                aria-pressed={mode === 'plan'}
+                disabled={busy || applying}
+                onClick={() => {
+                  setPlan(undefined);
+                  navigateTab('plan');
+                }}
+              >
+                Plan
+              </button>
+              <button
                 aria-pressed={mode === 'propose'}
                 disabled={busy || applying}
-                onClick={() => setMode('propose')}
+                onClick={() => {
+                  setMode('propose');
+                  setTab('chat');
+                }}
               >
                 Edit
               </button>
@@ -389,7 +522,9 @@ export function AiAssistant({
               placeholder={
                 mode === 'ask'
                   ? 'What would you like to understand?'
-                  : 'Describe the change you want to make…'
+                  : mode === 'plan'
+                    ? 'Describe the goal, expected behavior and constraints…'
+                    : 'Describe the change you want to make…'
               }
               value={question}
               maxLength={8000}
@@ -404,6 +539,7 @@ export function AiAssistant({
                   question.trim() &&
                   !busy &&
                   !applying &&
+                  !submitBlocked &&
                   (model || configuredId)
                 ) {
                   e.preventDefault();
@@ -411,9 +547,9 @@ export function AiAssistant({
                 }
               }}
             />
-            {(error || contextWarning) && (
+            {contextWarning && (
               <p role="alert" className="context-warning">
-                {error || contextWarning}
+                {contextWarning}
               </p>
             )}
             <div className="ai-composer-footer">
@@ -425,22 +561,23 @@ export function AiAssistant({
               ) : (
                 <button
                   className="primary"
-                  disabled={!ready || !question.trim() || applying || (!model && !configuredId)}
+                  disabled={!ready || !question.trim() || applying || !!submitBlocked}
                   onClick={() => {
                     void start(mode);
                   }}
                 >
-                  {mode === 'ask' ? 'Ask selection ↗' : 'Propose changes ↗'}
+                  {mode === 'ask'
+                    ? 'Ask selection ↗'
+                    : mode === 'plan'
+                      ? 'Create plan ↗'
+                      : 'Propose changes ↗'}
                 </button>
               )}
             </div>
           </div>
-          <p className="ai-disclosure">
-            {!fileCount
-              ? 'Select files on the graph to begin.'
-              : sync !== 'up-to-date'
-                ? 'Waiting for graph synchronization…'
-                : 'Selected source is prepared automatically and sent only when you submit.'}
+          <p className={`ai-disclosure${submitBlocked ? ' submit-blocked' : ''}`}>
+            {submitBlocked ??
+              'Selected source is prepared automatically and sent only when you submit.'}
           </p>
           {usage && (
             <p className="helper-text">
@@ -449,6 +586,47 @@ export function AiAssistant({
             </p>
           )}
         </div>
+      </div>
+      <div
+        className="assistant-page assistant-plan"
+        id={plan ? 'assistant-page-plan' : undefined}
+        role="tabpanel"
+        aria-labelledby="assistant-tab-plan"
+        hidden={tab !== 'plan' || !plan}
+      >
+        <button
+          onClick={() => {
+            setPlan(undefined);
+            navigateTab('plan');
+            requestAnimationFrame(() => input.current?.focus());
+          }}
+        >
+          Create a new plan →
+        </button>
+        {!plan && (
+          <p className="helper-text">
+            Describe the task in Plan. The model proposes file and symbol changes before generating
+            any source edits.
+          </p>
+        )}
+        {plan && (
+          <CodingPlanReview
+            plan={plan}
+            revision={revision}
+            editable={editableFileIds}
+            busy={busy || applying || !ready}
+            onGenerate={(ids) => void start('propose', ids)}
+            onFocus={(ids) =>
+              onAction({
+                id: `plan:${plan.id}`,
+                kind: 'focus',
+                fileIds: ids,
+                paths: [],
+                reason: 'Inspect coding plan',
+              })
+            }
+          />
+        )}
       </div>
       <div
         className="assistant-page assistant-changes"
@@ -488,6 +666,15 @@ export function AiAssistant({
             state={proposalState}
             applying={applying}
             ready={ready}
+            onSelectionChange={(accepted) =>
+              onReview?.({
+                proposal,
+                accepted,
+                reviewed,
+                state: proposalState,
+                applied: appliedIds ?? [],
+              })
+            }
             conflict={conflict}
             onRegenerate={() => {
               setMode('propose');
@@ -497,13 +684,68 @@ export function AiAssistant({
             onApply={() => setApplying(true)}
           />
         )}
-        {verification && (
+      </div>
+      <div
+        className="assistant-page assistant-changes"
+        id="assistant-page-verify"
+        role="tabpanel"
+        aria-labelledby="assistant-tab-verify"
+        hidden={tab !== 'verify'}
+      >
+        {!verification && (
+          <div className="assistant-empty">
+            <h3>Verify after Apply</h3>
+            <p>
+              Review and apply source changes first. Diagnostics and user-selected tests will appear
+              here.
+            </p>
+          </div>
+        )}
+        {!!verificationHistory.length && (
+          <label className="verification-rounds">
+            Task rounds · session only
+            <select
+              aria-label="Verification round"
+              value={round?.id ?? ''}
+              title={round?.changedFiles.map((f) => f.path).join(', ')}
+              onChange={(event) => setRoundId(event.target.value)}
+            >
+              {verificationHistory.map((r, index) => (
+                <option key={r.id} value={r.id}>
+                  {index === 0 ? 'Latest' : `Earlier round ${verificationHistory.length - index}`} ·{' '}
+                  {new Date(r.observedAt).toLocaleTimeString()} · {r.changedFiles.length}{' '}
+                  {r.changedFiles.length === 1 ? 'file' : 'files'} · {r.test?.state ?? 'not tested'}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+        {round && (
           <VerificationPanel
-            report={verification}
+            historical={historicalRound}
+            report={round}
             error={verificationError}
             include={includeVerification}
             onInclude={setIncludeVerification}
             onAction={onAction}
+            onRepair={() => {
+              setIncludeVerification(true);
+              const ids = [
+                ...new Set([
+                  ...round.changedFiles.map((f) => f.id),
+                  ...round.diagnostics.filter((d) => d.severity === 'error').map((d) => d.fileId),
+                ]),
+              ]
+                .filter((id) => !sourceIds.includes(id) && graph.nodes.some((n) => n.id === id))
+                .slice(0, Math.max(0, 50 - sourceIds.length));
+              onAddSource(ids.filter((id) => !sourceIds.includes(id)));
+              setMode('plan');
+              setPlan(undefined);
+              setQuestion(
+                'Plan a minimal repair for the failed tests and diagnostics in the included report using current reviewed source. Identify missing context explicitly. Do not claim to have run tests. Only propose edits to files I allow.',
+              );
+              setTab('context');
+            }}
           />
         )}
       </div>
@@ -514,7 +756,33 @@ export function AiAssistant({
         aria-labelledby="assistant-tab-context"
         hidden={tab !== 'context'}
       >
+        <ContextSuggestions
+          suggestions={suggestions}
+          count={fileCount}
+          disabled={busy || applying}
+          onAdd={onAddSource}
+        />
         {contextContent}
+        {includeVerification && verification && (
+          <div className="repair-context">
+            <details open>
+              <summary>Report to include · revision {verification.revision}</summary>
+              <p>
+                {verification.diagnostics.filter((d) => d.severity === 'error').length} errors ·{' '}
+                {verification.test?.name ?? 'No test'} · {verification.test?.state ?? 'not run'}
+              </p>
+              <pre>{JSON.stringify(verification, null, 2)}</pre>
+            </details>
+            <div className="context-bar">
+              <span>
+                Report selected for the next AI request. Review source and report before sending.
+              </span>
+              <button onClick={() => navigateTab(mode === 'plan' ? 'plan' : 'chat')}>
+                Review question →
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     </section>
   );

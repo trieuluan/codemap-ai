@@ -1,3 +1,4 @@
+import { verificationFailureScope, type VerificationReport } from '../shared/verification';
 import type { AiGraphAction } from '../shared/ai-actions';
 import { ArchitecturePanel, ArchitectureNodeLabel } from './components/ArchitecturePanel';
 import { ContextPanel } from './components/ContextPanel';
@@ -38,6 +39,16 @@ import { GraphToolbar } from './components/GraphToolbar';
 import { InvestigationPanel } from './components/InvestigationPanel';
 import { ShowPathContext } from './components/ImportRoute';
 import { graphForPath, withSymbols, type ImpactTarget } from '../shared/investigation';
+import {
+  createWorkingSet,
+  extendWorkingSet,
+  workingDisplay,
+  readWorkingSet,
+  type WorkingSet,
+} from '../shared/working-set';
+import { WorkingSetPanel } from './components/WorkingSetPanel';
+import { importDelta, reviewFileState, type ReviewState } from '../shared/review-graph';
+import type { CodingPlan } from '../shared/ai-plan';
 
 const syncLabels: Record<SyncState, string> = {
   'up-to-date': 'Up to date',
@@ -55,7 +66,12 @@ export function App() {
   const [libraryOpen, setLibraryOpen] = useState(false);
   const [overviewOpen, setOverviewOpen] = useState(false);
   const [overviewDepth, setOverviewDepth] = useState(2);
-  const [assistantIntent, setAssistantIntent] = useState<{ mode: 'ask' | 'propose'; id: string }>();
+  const [taskStage, setTaskStage] = useState<'explore' | 'plan' | 'review' | 'verify'>('explore');
+  const [assistantIntent, setAssistantIntent] = useState<{
+    mode: 'ask' | 'propose' | 'plan';
+    id: string;
+    tab?: 'chat' | 'plan' | 'changes' | 'verify' | 'context';
+  }>();
   const [contextOpen, setContextOpen] = useState(false);
   const [contextIds, setContextIds] = useState<string[]>([]);
   const [notice, setNotice] = useState('');
@@ -73,6 +89,48 @@ export function App() {
   const [activeFileId, setActiveFileId] = useState<string>();
   const [revealRequest, setRevealRequest] = useState<{ nodeId: string }>();
   const [aiRegion, setAiRegion] = useState<string[]>();
+  const [fileStatus, setFileStatus] = useState<
+    Extract<HostMessage, { type: 'fileStatus' }>['files']
+  >([]);
+  const [verification, setVerification] = useState<VerificationReport>();
+  const failureScope = useMemo(() => verificationFailureScope(verification), [verification]);
+  const [codingPlan, setCodingPlan] = useState<CodingPlan>();
+  const [review, setReview] = useState<ReviewState>();
+  const [graphPreview, setGraphPreview] =
+    useState<Extract<HostMessage, { type: 'aiGraphPreview' }>>();
+  const [graphLayer, setGraphLayer] = useState<'current' | 'before' | 'proposed' | 'applied'>(
+    'current',
+  );
+  const [hoveredEdge, setHoveredEdge] = useState<string>();
+  const task = view.workingSet;
+  const mappedSnapshot = useMemo(
+    () =>
+      graphLayer === 'before' && graphPreview
+        ? graphPreview.before
+        : graphLayer === 'proposed' && graphPreview
+          ? {
+              ...graphPreview.proposed,
+              edges: [
+                ...graphPreview.proposed.edges,
+                ...importDelta(graphPreview.before, graphPreview.proposed).removed,
+              ],
+            }
+          : snapshot,
+    [graphLayer, graphPreview, snapshot],
+  );
+  // A preview is valid only for the exact accepted edits and source revision.
+  useEffect(() => {
+    if (graphLayer !== 'proposed' || !graphPreview || !review) {
+      return;
+    }
+    if (
+      review.state !== 'ready' ||
+      graphPreview.before.revision !== snapshot?.revision ||
+      graphPreview.changeIds.slice().sort().join() !== review.accepted.slice().sort().join()
+    ) {
+      setGraphLayer('current');
+    }
+  }, [graphLayer, graphPreview, review, snapshot?.revision]);
   const [tracePath, setTracePath] = useState<string[]>();
   const [symbolsFileId, setSymbolsFileId] = useState<string>();
   const [selectedSymbolId, setSelectedSymbolId] = useState<string>();
@@ -87,7 +145,9 @@ export function App() {
         ? `path:${JSON.stringify(tracePath)}`
         : symbolsFileId
           ? `symbols:${symbolsFileId}`
-          : layoutKey(view);
+          : task
+            ? 'working-set'
+            : layoutKey(view);
   const clearInspection = (record = true) => {
     if (record) {
       history.begin();
@@ -196,6 +256,11 @@ export function App() {
     setContextId(location.contextId);
     setGroupSelection(location.group);
     setPeekGroups(location.peek);
+    if (location.view.workingSet) {
+      setContextIds(location.view.workingSet.context);
+    } else if (viewRef.current.workingSet) {
+      setContextIds([]);
+    }
     setEdgeSelection(undefined);
     inspectionPositions.current = { ...location.positions };
     arrangePeek.current = false;
@@ -235,6 +300,69 @@ export function App() {
   };
   useHostMessages((message: HostMessage) => {
     switch (message.type) {
+      case 'fileStatus':
+        if (message.rootId === rootId.current) {
+          setFileStatus(message.files);
+        }
+        break;
+      case 'aiVerification':
+        if (message.report.rootId === rootId.current) {
+          setVerification(message.report);
+        }
+        break;
+      case 'aiProgress':
+        if (message.plan?.rootId === rootId.current) {
+          setCodingPlan(message.plan);
+          setTaskStage('plan');
+        }
+        break;
+      case 'aiProposalState':
+        if (message.rootId === rootId.current) {
+          setReview((old) => ({
+            proposal: message.proposal,
+            accepted:
+              old?.proposal.id === message.proposal.id
+                ? old.accepted
+                : message.proposal.changes.map((c) => c.id),
+            reviewed: message.reviewed,
+            state: message.state,
+            applied: message.appliedIds ?? [],
+          }));
+          const reviewChanged =
+            review?.proposal.id !== message.proposal.id || review?.state !== message.state;
+          if (reviewChanged && message.state === 'ready') {
+            setTaskStage('review');
+          }
+          if (reviewChanged && message.state === 'applied') {
+            setTaskStage('verify');
+            setGraphLayer('applied');
+          }
+          if (graphPreview?.proposalId !== message.proposal.id) {
+            setGraphPreview(undefined);
+            setGraphLayer('current');
+          }
+        }
+        break;
+      case 'aiDiffOpened':
+        setReview((old) =>
+          old?.proposal.id === message.proposalId
+            ? { ...old, reviewed: [...new Set([...old.reviewed, ...message.changeIds])] }
+            : old,
+        );
+        break;
+      case 'aiGraphPreview':
+        if (
+          message.before.root.id === rootId.current &&
+          message.proposalId === review?.proposal.id
+        ) {
+          setGraphPreview(message);
+          setGraphLayer('proposed');
+          clearInspection();
+        }
+        break;
+      case 'aiGraphPreviewError':
+        setNotice(message.message);
+        break;
       case 'library':
         if (message.rootId === rootId.current) {
           setLibrary(readLibrary(message.library));
@@ -250,6 +378,13 @@ export function App() {
         const next = message.snapshot;
         const sameRoot = rootId.current === next.root.id;
         if (!sameRoot) {
+          setFileStatus([]);
+          setVerification(undefined);
+          setTaskStage('explore');
+          setCodingPlan(undefined);
+          setReview(undefined);
+          setGraphPreview(undefined);
+          setGraphLayer('current');
           clearInspection(false);
           setImpactTarget(undefined);
           setQuery('');
@@ -286,6 +421,9 @@ export function App() {
         }
         // Initial viewState is sent before the first snapshot.
         applyView(restored, false);
+        if (!sameRoot) {
+          setContextIds(restored.workingSet?.context ?? []);
+        }
         setSnapshot(next);
         setError('');
         setEmpty({
@@ -295,11 +433,19 @@ export function App() {
         break;
       }
       case 'viewState':
+        if (rootId.current !== message.rootId) {
+          setReview(undefined);
+          setGraphPreview(undefined);
+          setCodingPlan(undefined);
+          setFileStatus([]);
+          setGraphLayer('current');
+        }
         setRevealRequest(undefined);
         clearInspection(false);
         setImpactTarget(undefined);
         rootId.current = message.rootId;
         applyView(readView(message.state), false);
+        setContextIds(readView(message.state).workingSet?.context ?? []);
         setContextId(undefined);
         setPeekGroups([]);
         setEdgeSelection(undefined);
@@ -356,26 +502,29 @@ export function App() {
   );
   const contextFile = snapshot?.nodes.find((node) => node.id === (contextId ?? view.selected));
   const display = useMemo(() => {
-    if (!snapshot) {
+    if (!mappedSnapshot) {
       return { nodes: [], edges: [], visibleFiles: 0 };
+    }
+    if (task && !inspecting) {
+      return workingDisplay(mappedSnapshot, task);
     }
     const source = aiRegion
       ? {
-          ...snapshot,
-          nodes: snapshot.nodes.filter((n) => aiRegion.includes(n.id)),
-          edges: snapshot.edges.filter(
+          ...mappedSnapshot,
+          nodes: mappedSnapshot.nodes.filter((n) => aiRegion.includes(n.id)),
+          edges: mappedSnapshot.edges.filter(
             (e) => aiRegion.includes(e.source) && aiRegion.includes(e.target),
           ),
         }
       : tracePath
-        ? graphForPath(snapshot, tracePath)
+        ? graphForPath(mappedSnapshot, tracePath)
         : symbolsFileId
           ? {
-              ...snapshot,
-              nodes: snapshot.nodes.filter((node) => node.id === symbolsFileId),
+              ...mappedSnapshot,
+              nodes: mappedSnapshot.nodes.filter((node) => node.id === symbolsFileId),
               edges: [],
             }
-          : snapshot;
+          : mappedSnapshot;
     const state = inspecting
       ? {
           ...view,
@@ -398,6 +547,8 @@ export function App() {
     );
   }, [
     snapshot,
+    mappedSnapshot,
+    task,
     view,
     contextFile?.id,
     peekGroups,
@@ -427,6 +578,11 @@ export function App() {
     [display],
   );
   const togglePeek = (id?: string) => {
+    if (id?.startsWith('boundary:') && task) {
+      const members = display.nodes.find((n) => n.id === id)?.members ?? [];
+      updateTask(extendWorkingSet(task, members));
+      return;
+    }
     history.begin();
     setEdgeSelection(undefined);
     setPeekGroups((current) =>
@@ -446,10 +602,19 @@ export function App() {
       id: node.id,
       position: positions[node.id] ?? { x: 0, y: 0 },
       initialWidth: width,
-      initialHeight: overviewOpen ? 96 : node.kind === 'folder' ? 240 : height,
+      initialHeight: overviewOpen
+        ? 96
+        : node.kind === 'folder'
+          ? 240
+          : task || review
+            ? 120
+            : height,
       sourcePosition: tracePath ? Position.Bottom : Position.Right,
       targetPosition: tracePath ? Position.Top : Position.Left,
-      style: { width, height: overviewOpen ? 96 : node.kind === 'folder' ? 240 : height },
+      style: {
+        width,
+        height: overviewOpen ? 96 : node.kind === 'folder' ? 240 : task || review ? 120 : height,
+      },
       data: {
         layoutKey: canvasKey,
         label: overviewOpen ? (
@@ -464,6 +629,72 @@ export function App() {
           />
         ) : (
           <FileNodeLabel
+            onIssue={
+              node.members.some(
+                (id) => failureScope.diagnostics.has(id) || failureScope.testScope.has(id),
+              )
+                ? () => {
+                    const index =
+                      verification?.diagnostics.findIndex(
+                        (d) => node.members.includes(d.fileId) && d.severity === 'error',
+                      ) ?? -1;
+                    if (index >= 0 && verification) {
+                      send({ type: 'aiOpenDiagnostic', reportId: verification.id, index });
+                    } else {
+                      setContextOpen(true);
+                      setLibraryOpen(false);
+                      setAssistantIntent({ mode: 'ask', id: crypto.randomUUID(), tab: 'verify' });
+                    }
+                  }
+                : undefined
+            }
+            badges={[
+              ...(node.members.some((id) => failureScope.testScope.has(id))
+                ? ['Failed test scope']
+                : []),
+              ...(node.members.some((id) => fileStatus.some((f) => f.id === id && f.dirty))
+                ? ['Unsaved']
+                : []),
+              ...(node.members.some((id) => fileStatus.some((f) => f.id === id && f.errors))
+                ? ['Errors']
+                : []),
+              ...(task?.pinned.some((id) => node.members.includes(id)) ? ['Pinned'] : []),
+              ...(task?.editable.some((id) => node.members.includes(id)) ? ['Editable'] : []),
+              ...(codingPlan &&
+              codingPlan.revision === snapshot?.revision &&
+              codingPlan.steps.some((s) => node.members.includes(s.fileId))
+                ? [
+                    codingPlan.steps.some(
+                      (s) => node.members.includes(s.fileId) && s.role === 'edit',
+                    )
+                      ? 'Plan edit'
+                      : 'Plan read',
+                  ]
+                : []),
+              ...(review && node.kind === 'file' && reviewFileState(review, node.id)
+                ? [reviewFileState(review, node.id)!]
+                : []),
+            ]}
+            onReview={
+              review?.state === 'ready' &&
+              review.proposal.changes.some((c) => node.members.includes(c.fileId))
+                ? () => {
+                    const candidates = review.proposal.changes.filter(
+                      (c) => node.members.includes(c.fileId) && review.accepted.includes(c.id),
+                    );
+                    const change =
+                      candidates.find((c) => !review.reviewed.includes(c.id)) ?? candidates[0];
+                    if (change) {
+                      send({
+                        type: 'aiDiff',
+                        proposalId: review.proposal.id,
+                        fileId: change.fileId,
+                        changeId: change.id,
+                      });
+                    }
+                  }
+                : undefined
+            }
             node={node}
             annotation={library.annotations.find(
               (a) =>
@@ -518,10 +749,26 @@ export function App() {
         },
       });
     }
-  }, [display, baseEdges, setNodes, applyView, inspecting, canvasKey, library]);
+  }, [
+    display,
+    baseEdges,
+    setNodes,
+    applyView,
+    inspecting,
+    canvasKey,
+    library,
+    fileStatus,
+    verification,
+    failureScope,
+    review,
+    codingPlan,
+  ]);
   const selectFile = (id: string) => {
     if (!snapshot) {
       return;
+    }
+    if (task && !task.files.includes(id)) {
+      updateTask(extendWorkingSet(task, [id]));
     }
     clearInspection();
     setImpactTarget(undefined);
@@ -600,17 +847,54 @@ export function App() {
   const contextSource = display.nodes.find(
     (node) => contextFile && node.members.includes(contextFile.id),
   )?.id;
+  const changeEdges = useMemo(() => {
+    const delta =
+      graphPreview && graphLayer !== 'current'
+        ? importDelta(
+            graphPreview.before,
+            graphLayer === 'applied' && snapshot ? snapshot : graphPreview.proposed,
+          )
+        : undefined;
+    return {
+      added: new Set(delta?.added.map((e) => e.id)),
+      removed: new Set(delta?.removed.map((e) => e.id)),
+      sources: new Map(display.edges.map((e) => [e.id, e.fileEdges])),
+    };
+  }, [graphPreview, graphLayer, snapshot, display.edges]);
   const edges = baseEdges.map((edge) => {
+    const sources = changeEdges.sources.get(edge.id) ?? [];
+    const added = sources.filter((id) => changeEdges.added.has(id)).length;
+    const removed = sources.filter((id) => changeEdges.removed.has(id)).length;
     const picked =
       edge.id === edgeSelection ||
       (!!contextTarget && edge.source === contextSource && edge.target === contextTarget);
     return {
       ...edge,
+      label:
+        added || removed
+          ? `+${added} / −${removed}`
+          : picked ||
+              edge.source === selected ||
+              edge.target === selected ||
+              hoveredEdge === edge.id
+            ? edge.label
+            : undefined,
       selected: picked,
       className:
-        picked || edge.source === selected || edge.target === selected ? 'related-edge' : '',
+        !added && !removed && (picked || edge.source === selected || edge.target === selected)
+          ? 'related-edge'
+          : '',
       style: {
         ...edge.style,
+        ...(added
+          ? { stroke: 'var(--vscode-testing-iconPassed, #4caf80)', strokeWidth: 2 }
+          : removed
+            ? {
+                stroke: 'var(--vscode-testing-iconFailed, #e56b6f)',
+                strokeDasharray: '6 4',
+                strokeWidth: 2,
+              }
+            : {}),
         opacity: edgeSelection
           ? picked
             ? 1
@@ -667,12 +951,86 @@ export function App() {
     ),
   ].sort();
   const maxDepth = Math.max(1, ...folders.map((folder) => folder.split('/').length));
+  const updateTask = (next: WorkingSet) => {
+    const valid = readWorkingSet({ ...next, name: next.name.trim() ? next.name : 'New task' });
+    if (!valid) {
+      return;
+    }
+    updateView({ workingSet: valid });
+    setContextIds(valid.context);
+  };
+  const beginTask = (ids: string[]) => {
+    if (!ids.length) {
+      setNotice('Select files or Shift-click a region first.');
+      return;
+    }
+    if (task) {
+      updateTask(extendWorkingSet(task, ids));
+      clearInspection();
+      return;
+    }
+    history.begin();
+    clearInspection(false);
+    const set = createWorkingSet(ids);
+    setTaskStage('explore');
+    const anchor = snapshot?.nodes
+      .flatMap((n) =>
+        (n.declarations ?? []).map((s) => ({
+          nodeId: n.id,
+          name: s.name,
+          kind: s.kind,
+          id: symbolNodeId(n.id, s.id),
+        })),
+      )
+      .find((s) => s.id === selectedSymbolId);
+    if (anchor) {
+      set.symbols = [{ nodeId: anchor.nodeId, name: anchor.name, kind: anchor.kind }];
+    }
+    applyView({
+      ...viewRef.current,
+      workingSet: set,
+      positions: {},
+      viewport: undefined,
+      layouts: {
+        ...viewRef.current.layouts,
+        [`workspace:${layoutKey(viewRef.current)}`]: {
+          positions: viewRef.current.positions,
+          viewport: flow.getViewport(),
+        },
+      },
+    });
+    setContextIds(set.context);
+    setGroupSelection(undefined);
+    setEdgeSelection(undefined);
+    needsViewport.current = true;
+  };
+  const exitTask = () => {
+    clearInspection();
+    const saved = viewRef.current.layouts[`workspace:${layoutKey(viewRef.current)}`];
+    applyView({
+      ...viewRef.current,
+      workingSet: undefined,
+      positions: saved?.positions ?? {},
+      viewport: saved?.viewport,
+    });
+    setContextIds([]);
+    setGroupSelection(undefined);
+    setEdgeSelection(undefined);
+    needsViewport.current = true;
+  };
   const addContext = (ids: string[]) => {
-    setContextIds((current) => [...new Set([...current, ...ids])]);
+    if (task) {
+      updateTask({
+        ...extendWorkingSet(task, ids),
+        context: [...new Set([...task.context, ...ids])].slice(0, 50),
+      });
+    } else {
+      setContextIds((current) => [...new Set([...current, ...ids])]);
+    }
     setContextOpen(true);
     setLibraryOpen(false);
   };
-  const openAssistant = (mode: 'ask' | 'propose', ids: string[]) => {
+  const openAssistant = (mode: 'ask' | 'propose' | 'plan', ids: string[]) => {
     addContext(ids);
     setAssistantIntent({ mode, id: crypto.randomUUID() });
   };
@@ -697,6 +1055,16 @@ export function App() {
     clearInspection();
     setImpactTarget(undefined);
     setGroupSelection(undefined);
+    if (task && snapshot) {
+      updateTask(
+        extendWorkingSet(
+          task,
+          snapshot.nodes.filter((n) => n.path.startsWith(`${path}/`)).map((n) => n.id),
+        ),
+      );
+      needsViewport.current = true;
+      return;
+    }
     const next = switchLayout(viewRef.current, 'folders', overviewDepth);
     applyView({
       ...next,
@@ -712,6 +1080,10 @@ export function App() {
   const resetFilters = () =>
     updateView({ folder: '', hideTests: false, hideIsolated: false, focus: 0 });
   const expand = (id: string) => {
+    if (id.startsWith('boundary:') && task) {
+      togglePeek(id);
+      return;
+    }
     history.begin();
     fitMembers.current = display.nodes.find((node) => node.id === id)?.members;
     updateView({ expanded: [...new Set([...view.expanded, id])] });
@@ -748,6 +1120,11 @@ export function App() {
     <ShowPathContext.Provider value={showPath}>
       <div className="app">
         <GraphToolbar
+          taskActive={!!task}
+          canWork={!!contextIds.length || !!file || !!group?.members.length}
+          onWork={() =>
+            beginTask(contextIds.length ? contextIds : file ? [file.id] : (group?.members ?? []))
+          }
           onOverview={openOverview}
           onContext={() => {
             if (!contextOpen && !contextIds.length && file) {
@@ -783,7 +1160,105 @@ export function App() {
           }}
           onAutoLayout={autoLayout}
         />
-        {optionsOpen && (
+        {task && snapshot && (
+          <WorkingSetPanel
+            set={task}
+            graph={snapshot}
+            onChange={updateTask}
+            onExit={exitTask}
+            onReturn={() => {
+              clearInspection();
+              setGraphLayer('current');
+              setImpactTarget(undefined);
+              setGroupSelection(undefined);
+              setEdgeSelection(undefined);
+              needsViewport.current = true;
+            }}
+            onSave={() =>
+              send({
+                type: 'saveBookmark',
+                rootId: snapshot.root.id,
+                name: task.name,
+                location: capture(),
+              })
+            }
+            onNeighbors={() => {
+              const ids = snapshot.edges
+                .filter((e) => task.files.includes(e.source) || task.files.includes(e.target))
+                .flatMap((e) => [e.source, e.target]);
+              updateTask(extendWorkingSet(task, ids));
+            }}
+            stage={taskStage}
+            onStage={(stage) => {
+              setTaskStage(stage);
+              if (stage === 'explore') {
+                setContextOpen(false);
+                clearInspection();
+                return;
+              }
+              setContextOpen(true);
+              setLibraryOpen(false);
+              setContextIds(task.context);
+              setAssistantIntent({
+                id: crypto.randomUUID(),
+                mode: stage === 'plan' ? 'plan' : 'ask',
+                tab: stage === 'plan' ? 'plan' : stage === 'review' ? 'changes' : 'verify',
+              });
+            }}
+            onAssistant={(mode) => {
+              setTaskStage(mode === 'ask' ? 'explore' : mode === 'plan' ? 'plan' : 'review');
+              setContextIds(task.context);
+              setContextOpen(true);
+              setLibraryOpen(false);
+              setAssistantIntent({ mode, id: crypto.randomUUID() });
+            }}
+            onOpen={(id) => {
+              selectFile(id);
+              send({ type: 'openFile', nodeId: id });
+            }}
+          />
+        )}
+        {review && (
+          <div className="context-bar review-map-toolbar">
+            <strong>Change map</strong>
+            <span>Static imports · node badges show review status</span>
+            <button
+              onClick={() => setGraphLayer('current')}
+              aria-pressed={graphLayer === 'current'}
+            >
+              Current
+            </button>
+            <button
+              disabled={!graphPreview}
+              aria-pressed={graphLayer === 'before'}
+              onClick={() => setGraphLayer('before')}
+            >
+              Before
+            </button>
+            <button
+              disabled={
+                !graphPreview ||
+                review.state !== 'ready' ||
+                graphPreview.before.revision !== snapshot?.revision ||
+                graphPreview.changeIds.slice().sort().join() !==
+                  review.accepted.slice().sort().join()
+              }
+              aria-pressed={graphLayer === 'proposed'}
+              onClick={() => setGraphLayer('proposed')}
+            >
+              Proposed
+            </button>
+            <button
+              disabled={review.state !== 'applied'}
+              aria-pressed={graphLayer === 'applied'}
+              onClick={() => setGraphLayer('applied')}
+            >
+              Applied
+            </button>
+            <small>+ Added imports · − Removed imports · impact is not a runtime call graph</small>
+          </div>
+        )}
+        {optionsOpen && !task && (
           <ViewOptions
             view={view}
             folders={folders}
@@ -838,6 +1313,8 @@ export function App() {
               nodes={decoratedNodes}
               edges={edges}
               onNodesChange={onNodesChange}
+              onEdgeMouseEnter={(_event, edge) => setHoveredEdge(edge.id)}
+              onEdgeMouseLeave={() => setHoveredEdge(undefined)}
               onEdgeClick={(_event, edge) => {
                 history.begin();
                 if (!display.edges.find((item) => item.id === edge.id)?.relation) {
@@ -849,6 +1326,10 @@ export function App() {
                 if (event.shiftKey && item) {
                   const ids =
                     item.kind === 'symbol' && item.ownerId ? [item.ownerId] : item.members;
+                  if (task) {
+                    updateTask(extendWorkingSet(task, ids));
+                    return;
+                  }
                   setContextIds((current) =>
                     ids.every((id) => current.includes(id))
                       ? current.filter((id) => !ids.includes(id))
@@ -874,7 +1355,7 @@ export function App() {
                 setSelectedSymbolId(undefined);
                 setImpactTarget(undefined);
                 setEdgeSelection(undefined);
-                if (node.id.startsWith('folder:')) {
+                if (item?.kind === 'folder') {
                   setContextId(contextFile?.id);
                   setGroupSelection(node.id);
                   updateView({ selected: node.id, focus: 0 });
@@ -962,6 +1443,9 @@ export function App() {
           </main>
           {contextOpen && snapshot ? (
             <ContextPanel
+              onNavigate={setTaskStage}
+              editableFileIds={task?.editable}
+              onReview={setReview}
               key={snapshot.root.id}
               intent={assistantIntent}
               snapshot={snapshot}
@@ -1025,12 +1509,23 @@ export function App() {
                   }
                 }
               }}
-              onToggle={(id) =>
+              onToggle={(id) => {
+                if (task) {
+                  updateTask({
+                    ...extendWorkingSet(task, [id]),
+                    context: task.context.includes(id)
+                      ? task.context.filter((x) => x !== id)
+                      : [...task.context, id],
+                  });
+                  return;
+                }
                 setContextIds((current) =>
                   current.includes(id) ? current.filter((item) => item !== id) : [...current, id],
-                )
+                );
+              }}
+              onClear={() =>
+                task ? updateTask({ ...task, context: [], editable: [] }) : setContextIds([])
               }
-              onClear={() => setContextIds([])}
               onClose={() => setContextOpen(false)}
             />
           ) : libraryOpen && snapshot ? (
@@ -1071,6 +1566,9 @@ export function App() {
               contextAction={
                 file || group ? (
                   <div className="assistant-file-actions">
+                    <button onClick={() => beginTask(file ? [file.id] : group!.members)}>
+                      Work on this
+                    </button>
                     <button onClick={() => openAssistant('ask', file ? [file.id] : group!.members)}>
                       ✦ Ask AI
                     </button>

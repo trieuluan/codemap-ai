@@ -1,5 +1,24 @@
 # Change Log
 
+## Unreleased
+
+- Add CodeMap: Run AI Workflow Check in the signed-in profile, with synthetic single/multi-file edits, real tasks, report-backed repair and scoped cleanup. Verify the six-request workflow with copilot / Auto.
+
+- Refine graph toolbar and responsive Assistant: Plan drafts stay in Plan, request Stop/errors remain reachable across tabs, compact composers keep submission visible, context spacing is consistent, and failed test logs expand.
+- Guide tasks through Explore, Plan, Review and Verify with collapsed scope/actions and a next-step hint.
+- Suggest source context with import/declaration/test/request reasons and explicit review, independently of edit permissions.
+- Keep eight session verification rounds, open validated diagnostic locations and prepare report-backed repair plans using current source.
+- Reject stale Ask/Plan results after unsaved edits; extend the opt-in live fixture to single/multi-file Plan, graph preview, Apply and local tests.
+
+- Prevent blank AI conversations from CLI-only/invalid models and empty provider output; show model errors and a direct picker action.
+
+- Add named Working Sets with separate map, AI source and file edit scopes, pins, symbol anchors and Saved View persistence.
+- Group immediate outside neighbors and preserve task/editor navigation with dirty/error and review badges.
+- Add validated read/edit plans, selectable generation steps and current host-side file permission checks.
+- Preview accepted source replacements as Before/Proposed static import graphs without modifying buffers; show Applied graph after review.
+- Prepare a report-backed repair question after diagnostics or test failure, requiring explicit submission.
+- Cover task projection/persistence, plan permissions, preview cancellation and actual in-memory import analysis.
+
 ## 0.8.0
 
 - Prepare a local context summary before submission; expose token estimates, excerpt ranges and truncated/omitted files.

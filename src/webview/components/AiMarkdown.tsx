@@ -38,7 +38,7 @@ export function AiMarkdown({
                 <button
                   className="ai-inline-citation"
                   disabled={!onReference}
-                  title={`${reference.path} · L${reference.line}`}
+                  title={`${reference.path} · L${reference.line}${reference.endLine ? `–L${reference.endLine}` : ''}`}
                   onClick={() => onReference?.(reference)}
                 >
                   {children}

@@ -85,8 +85,8 @@ export function useContextPreview(
     window.addEventListener('message', receive);
     return () => window.removeEventListener('message', receive);
   }, [snapshot.root.id, snapshot.revision]);
-  const prepare = (action: 'ask' | 'propose' = 'ask'): Promise<PreparedContext> => {
-    const mode = action === 'propose' ? 'full' : options.mode;
+  const prepare = (action: 'ask' | 'propose' | 'plan' = 'ask'): Promise<PreparedContext> => {
+    const mode = action !== 'ask' ? 'full' : options.mode;
     if (pending.current) {
       return pending.current.mode === mode
         ? pending.current.promise

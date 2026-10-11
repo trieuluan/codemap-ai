@@ -6,6 +6,7 @@ import type { GraphSnapshot, SyncState } from '../../shared/model';
 import { contextCandidates, contextLimits } from '../../shared/context';
 import { PanelHeading, PanelSection } from './InspectorParts';
 import { send } from '../bridge';
+import type { ReviewState } from '../../shared/review-graph';
 
 export function ContextPanel({
   snapshot,
@@ -18,8 +19,18 @@ export function ContextPanel({
   onAdd,
   onGraphAction,
   intent,
+  editableFileIds,
+  onReview,
+  onNavigate,
 }: {
-  intent?: { mode: 'ask' | 'propose'; id: string };
+  intent?: {
+    mode: 'ask' | 'propose' | 'plan';
+    id: string;
+    tab?: 'chat' | 'plan' | 'changes' | 'verify' | 'context';
+  };
+  editableFileIds?: string[];
+  onReview?: (state: ReviewState) => void;
+  onNavigate?: (stage: 'explore' | 'plan' | 'review' | 'verify') => void;
   snapshot: GraphSnapshot;
   selected: string[];
   onToggle: (id: string) => void;
@@ -415,6 +426,15 @@ export function ContextPanel({
         }
       />
       <AiAssistant
+        onNavigate={onNavigate}
+        graph={snapshot}
+        sourceIds={fileIds}
+        onAddSource={(ids) => {
+          onAdd(ids);
+          setExcluded((current) => current.filter((id) => !ids.includes(id)));
+        }}
+        editableFileIds={editableFileIds}
+        onReview={onReview}
         intent={intent}
         contextBundle={bundle}
         contextSummary={

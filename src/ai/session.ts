@@ -1,5 +1,7 @@
+import { modelUnavailableReason, emptyResponseMessage } from '../shared/ai-model';
 import { EditConflict, editContent, prepareEdits } from '../shared/edits';
 import { Verification } from './verification';
+import type { TestRunner } from './test-runner';
 import {
   actionCatalog,
   actionInstructions,
@@ -22,12 +24,19 @@ import {
 } from '../shared/ai';
 import type { ContextBundle } from '../shared/context';
 import type { GraphSnapshot } from '../shared/model';
+import { parseCodingPlan, planPrompt, planEditScope, type CodingPlan } from '../shared/ai-plan';
 
 export interface AiSessionOptions {
+  testRunner?: TestRunner;
   post: (message: AiHostMessage) => void;
   context: (rootId: string, contextId: string) => ContextBundle;
   graph: () => GraphSnapshot | undefined;
+  editableFiles?: () => string[] | undefined;
   afterApply: () => Promise<void>;
+  previewGraph?: (
+    texts: Map<string, string>,
+    token: vscode.CancellationToken,
+  ) => Promise<GraphSnapshot>;
   log?: (message: string) => void;
   isCurrent?: () => boolean;
   configuredModel?: () => string;
@@ -64,8 +73,11 @@ export class AiSession implements vscode.Disposable {
   private reviewed = new Set<string>();
   private applying = false;
   private disposed = false;
+  private plan?: { value: CodingPlan; bundle: ContextBundle };
+  private previewRevision = 0;
+  private previewCancellation?: vscode.CancellationTokenSource;
   constructor(private options: AiSessionOptions) {
-    this.verification = new Verification(options.graph, options.post);
+    this.verification = new Verification(options.graph, options.post, options.testRunner);
     this.provider = vscode.workspace.registerTextDocumentContentProvider(this.scheme, {
       provideTextDocumentContent: (uri) => this.previews.get(uri.toString()) ?? '',
     });
@@ -75,6 +87,14 @@ export class AiSession implements vscode.Disposable {
       return this.options.configuredModel();
     }
     return vscode.workspace.getConfiguration('codemap.ai').get<string>('model', '');
+  }
+  private assertEditable(ids: string[]) {
+    const allowed = this.options.editableFiles?.();
+    if (allowed && ids.some((id) => !allowed.includes(id))) {
+      throw new Error(
+        'Edit permission was removed. Adjust task permissions and generate a fresh proposal.',
+      );
+    }
   }
   status(error?: string) {
     const model: AiModelInfo | undefined = this.model && {
@@ -92,13 +112,14 @@ export class AiSession implements vscode.Disposable {
   }
   async chooseModel() {
     try {
-      const models = await this.select();
+      const listed = await this.select();
+      const models = listed.filter((model) => !modelUnavailableReason(model));
       if (this.disposed) {
         return;
       }
       if (!models.length) {
         throw new Error(
-          'No VS Code models available. Enable a language model provider, sign in, then choose a model again.',
+          'No compatible VS Code chat models available. Copilot CLI entries cannot serve CodeMap requests. Enable/sign in to a compatible provider, then choose a model again.',
         );
       }
       const picked = await vscode.window.showQuickPick(
@@ -131,6 +152,10 @@ export class AiSession implements vscode.Disposable {
     }
   }
   cancel() {
+    this.previewRevision++;
+    this.previewCancellation?.cancel();
+    this.previewCancellation?.dispose();
+    this.previewCancellation = undefined;
     if (this.checking) {
       this.options.post({
         type: 'aiConnection',
@@ -182,6 +207,8 @@ export class AiSession implements vscode.Disposable {
     }
   }
   invalidate() {
+    this.plan = undefined;
+    this.previewRevision++;
     this.cancel();
     if (this.proposal) {
       this.proposal.state = 'expired';
@@ -332,6 +359,9 @@ export class AiSession implements vscode.Disposable {
       case 'aiRunTest':
         await this.verification.test(message.reportId, message.save);
         break;
+      case 'aiOpenDiagnostic':
+        await this.verification.openDiagnostic(message.reportId, message.index);
+        break;
       case 'aiStopTest':
         this.verification.stop();
         break;
@@ -340,6 +370,9 @@ export class AiSession implements vscode.Disposable {
         break;
       case 'aiApply':
         await this.apply(message.proposalId, message.changeIds);
+        break;
+      case 'aiPreviewGraph':
+        await this.previewGraph(message.proposalId, message.changeIds);
         break;
       case 'aiOpenReference': {
         const refs = this.answers.get(message.requestId);
@@ -387,6 +420,11 @@ export class AiSession implements vscode.Disposable {
     if (!this.model) {
       throw new Error('Selected model is unavailable. Choose another model.');
     }
+    const issue = modelUnavailableReason(this.model);
+    if (issue) {
+      this.status(issue);
+      throw new Error(issue);
+    }
     return this.model;
   }
   async testConnection() {
@@ -428,7 +466,7 @@ export class AiSession implements vscode.Disposable {
           }
         }
         if (!result.trim()) {
-          throw new Error('No response from model.');
+          throw new Error(emptyResponseMessage(model.name));
         }
         return model;
       };
@@ -466,6 +504,29 @@ export class AiSession implements vscode.Disposable {
       }
       cancellation.dispose();
     }
+  }
+  private async validateSource(bundle: ContextBundle, expected?: Map<string, string>) {
+    const documents = await Promise.all(
+      bundle.files.map((f) => vscode.workspace.openTextDocument(vscode.Uri.parse(f.id))),
+    );
+    const digests = new Map<string, string>();
+    for (const [index, file] of bundle.files.entries()) {
+      const current = documents[index].getText();
+      const digest = createHash('sha256').update(current).digest('hex');
+      const expectedDigest = expected?.get(file.id) ?? file.sourceDigest;
+      if (
+        expectedDigest
+          ? digest !== expectedDigest
+          : !file.excerpted &&
+            (file.truncated ? !current.startsWith(file.content) : current !== file.content)
+      ) {
+        throw new Error(
+          'Source changed while preparing or receiving the response. Review fresh context and retry.',
+        );
+      }
+      digests.set(file.id, digest);
+    }
+    return digests;
   }
   private async request(message: Extract<AiUiMessage, { type: 'aiRequest' }>) {
     this.cancel();
@@ -530,17 +591,54 @@ export class AiSession implements vscode.Disposable {
         typeof message.question !== 'string' ||
         !message.question.trim() ||
         message.question.length > 8000 ||
-        !['ask', 'propose'].includes(message.mode)
+        !['ask', 'propose', 'plan'].includes(message.mode)
       ) {
         throw new Error('Enter a question of at most 8,000 characters.');
       }
       const bundle = this.options.context(message.rootId, message.contextId);
       context = bundle;
+      let editable = message.editableFileIds ?? bundle.files.map((f) => f.id);
+      const permissions = this.options.editableFiles?.();
+      if (permissions) {
+        editable = editable.filter((id) => permissions.includes(id));
+      }
+      if (editable.some((id) => !bundle.files.some((f) => f.id === id))) {
+        throw new Error('Editable files must be included in source context.');
+      }
+      if (message.mode === 'plan' && !editable.length) {
+        throw new Error('Allow at least one file to be edited before planning.');
+      }
+      let approvedPlan = '';
+      if (message.mode === 'propose' && message.planId) {
+        const saved = this.plan;
+        if (
+          !saved ||
+          saved.value.id !== message.planId ||
+          saved.bundle.rootId !== bundle.rootId ||
+          saved.bundle.revision !== bundle.revision ||
+          saved.bundle.files.some(
+            (f) => bundle.files.find((n) => n.id === f.id)?.content !== f.content,
+          )
+        ) {
+          throw new Error('Plan expired or source changed. Create a fresh plan.');
+        }
+        const scope = planEditScope(saved.value, message.planStepIds ?? []);
+        if (scope.some((id) => !editable.includes(id))) {
+          throw new Error('Plan includes files no longer allowed for editing.');
+        }
+        editable = scope;
+        approvedPlan =
+          '\n\nApproved plan steps (data):\n' +
+          JSON.stringify(saved.value.steps.filter((s) => message.planStepIds?.includes(s.id)));
+      }
+      if (message.mode === 'propose' && !editable.length) {
+        throw new Error('No editable files selected.');
+      }
       if (!bundle.files.length) {
         throw new Error('Preview at least one file first.');
       }
       if (
-        message.mode === 'propose' &&
+        message.mode !== 'ask' &&
         (bundle.warnings.length || bundle.files.some((f) => f.truncated || f.excerpted))
       ) {
         throw new Error(
@@ -562,7 +660,7 @@ export class AiSession implements vscode.Disposable {
         message.mode === 'ask'
           ? this.conversations
               .get(key)
-              .filter((t) => !t.error)
+              .filter((t) => !t.error && t.answer.trim())
               .slice(-4)
           : [];
       const graph = this.options.graph();
@@ -574,8 +672,16 @@ export class AiSession implements vscode.Disposable {
           : undefined;
       const prompt = vscode.LanguageModelChatMessage.User(
         aiPrompt(bundle, message.question, message.mode) +
+          (message.mode === 'plan' ? '\n\n' + planPrompt(editable, bundle) : '') +
+          (message.mode === 'propose'
+            ? '\n\nEdit only these paths (other source is read-only): ' +
+              JSON.stringify(
+                bundle.files.filter((f) => editable.includes(f.id)).map((f) => f.path),
+              ) +
+              approvedPlan
+            : '') +
           (catalog ? '\n\n' + actionInstructions(catalog) : '') +
-          (message.mode === 'ask' && message.verificationId
+          (message.verificationId
             ? '\n\n' + this.verification.context(message.verificationId, message.rootId)
             : ''),
       );
@@ -613,6 +719,10 @@ export class AiSession implements vscode.Disposable {
       });
       // Preview may become stale while authorization or token counting is pending.
       this.options.context(message.rootId, message.contextId);
+      const requestSource = await this.validateSource(bundle);
+      if (!valid()) {
+        return;
+      }
       const response = await model.sendRequest(messages, {}, cancellation.token);
       let publishedAt = 0;
       for await (const part of response.text) {
@@ -640,9 +750,38 @@ export class AiSession implements vscode.Disposable {
       if (!valid()) {
         return;
       }
+      if (!text.trim()) {
+        throw new Error(emptyResponseMessage(model.name));
+      }
+      await this.validateSource(bundle, requestSource);
+      if (!valid()) {
+        return;
+      }
       this.options.context(message.rootId, message.contextId);
       const proposal =
         message.mode === 'propose' ? parseProposal(text, bundle, randomUUID()) : undefined;
+      if (proposal?.changes.some((c) => !editable.includes(c.fileId))) {
+        throw new Error(
+          'Model attempted to edit read-only source. Nothing applied; adjust the plan and try again.',
+        );
+      }
+      if (proposal) {
+        this.assertEditable(proposal.changes.map((c) => c.fileId));
+      }
+      const currentGraph = this.options.graph();
+      const plan =
+        message.mode === 'plan' && currentGraph
+          ? parseCodingPlan(text, bundle, currentGraph, editable, randomUUID())
+          : undefined;
+      if (message.mode === 'plan' && !plan) {
+        throw new Error('Graph is no longer available.');
+      }
+      if (plan) {
+        this.assertEditable(
+          plan.steps.filter((step) => step.role === 'edit').map((step) => step.fileId),
+        );
+        this.plan = { value: plan, bundle };
+      }
       if (proposal) {
         this.proposal = { value: proposal, bundle, state: 'ready' };
         this.publishProposal();
@@ -651,7 +790,7 @@ export class AiSession implements vscode.Disposable {
         catalog && graph
           ? parseAiActions(text, graph, catalog)
           : { answer: text, actions: [], warnings: [] };
-      const answer = proposal ? proposal.summary : parsed.answer;
+      const answer = plan ? plan.summary : proposal ? proposal.summary : parsed.answer;
       const references = proposal ? [] : aiReferences(answer, bundle);
       remember(answer, references, undefined, proposal ? [] : parsed.actions, parsed.warnings);
       this.options.post({
@@ -660,13 +799,18 @@ export class AiSession implements vscode.Disposable {
         text: answer,
         done: true,
         proposal,
+        plan,
         references,
       });
     } catch (error) {
-      if (text) {
+      if (text.trim()) {
         remember(message.mode === 'ask' ? text : 'Proposal generation failed.', [], String(error));
       }
       if (this.active?.cancellation === cancellation) {
+        this.options.post({ type: 'aiConnection', state: 'error', message: String(error) });
+        this.options.log?.(
+          `AI request failed: ${this.model?.vendor ?? 'unavailable'}; ${error instanceof vscode.LanguageModelError ? error.code : 'request'}; receivedText=${!!text.trim()}`,
+        );
         this.options.post({
           type: 'aiProgress',
           requestId: message.requestId,
@@ -676,11 +820,78 @@ export class AiSession implements vscode.Disposable {
         });
       }
     } finally {
-      if (!completed && text && message.mode === 'ask') {
+      if (!completed && text.trim() && message.mode === 'ask') {
         remember(text, [], 'Stopped before completion.');
       }
       if (this.active?.cancellation === cancellation) {
         this.active = undefined;
+      }
+      cancellation.dispose();
+    }
+  }
+  private async previewGraph(proposalId: string, ids: string[]) {
+    this.previewCancellation?.cancel();
+    this.previewCancellation?.dispose();
+    const cancellation = new vscode.CancellationTokenSource();
+    this.previewCancellation = cancellation;
+    const job = ++this.previewRevision;
+    const saved = this.proposal,
+      before = this.options.graph();
+    try {
+      if (
+        !saved ||
+        saved.value.id !== proposalId ||
+        saved.state !== 'ready' ||
+        !before ||
+        before.root.id !== saved.bundle.rootId ||
+        this.options.isCurrent?.() === false ||
+        !this.options.previewGraph
+      ) {
+        throw new Error('A current proposal is required to preview its graph.');
+      }
+      const current = new Map<string, string>();
+      for (const file of saved.bundle.files) {
+        current.set(
+          file.id,
+          (await vscode.workspace.openTextDocument(vscode.Uri.parse(file.id))).getText(),
+        );
+      }
+      const edits = prepareEdits(saved.value, saved.bundle, ids, current);
+      this.assertEditable(edits.map((c) => c.fileId));
+      const texts = new Map<string, string>();
+      for (const id of new Set(edits.map((e) => e.fileId))) {
+        texts.set(
+          id,
+          editContent(
+            current.get(id)!,
+            edits.filter((e) => e.fileId === id),
+          ),
+        );
+      }
+      const proposed = await this.options.previewGraph(texts, cancellation.token);
+      if (this.disposed || job !== this.previewRevision || this.proposal !== saved) {
+        return;
+      }
+      if (
+        this.options.graph()?.revision !== before.revision ||
+        this.options.graph()?.root.id !== before.root.id ||
+        this.options.isCurrent?.() === false
+      ) {
+        throw new Error('Source changed during graph preview. Preview again.');
+      }
+      for (const [id, text] of current) {
+        if ((await vscode.workspace.openTextDocument(vscode.Uri.parse(id))).getText() !== text) {
+          throw new Error('Source changed during graph preview. Preview again.');
+        }
+      }
+      this.options.post({ type: 'aiGraphPreview', proposalId, before, proposed, changeIds: ids });
+    } catch (error) {
+      if (!this.disposed && job === this.previewRevision) {
+        this.options.post({ type: 'aiGraphPreviewError', proposalId, message: String(error) });
+      }
+    } finally {
+      if (this.previewCancellation === cancellation) {
+        this.previewCancellation = undefined;
       }
       cancellation.dispose();
     }
@@ -766,6 +977,7 @@ export class AiSession implements vscode.Disposable {
         ids,
         new Map(documents.map((d) => [d.uri.toString(), d.getText()])),
       );
+      this.assertEditable(changes.map((c) => c.fileId));
       if (
         this.disposed ||
         this.proposal !== saved ||
