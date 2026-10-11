@@ -408,6 +408,99 @@ suite('CodeMap AI integration (fake model, no network)', () => {
       session.dispose();
     }
   });
+  test('AI graph suggestions require an explicit archived action ID and current revision', async () => {
+    const { graph, bundle } = await fixture();
+    const included = bundle.files.find((f) => f.path === 'a.ts')!;
+    const other = graph.nodes.find((n) => n.id !== included.id)!;
+    const context = {
+      ...bundle,
+      files: [included],
+      regionKey: contextRegionKey(graph.root.id, [included.id]),
+    };
+    const events: AiHostMessage[] = [];
+    let prompt = '';
+    let current = true;
+    const session = new AiSession({
+      post: (m) => events.push(m),
+      context: () => context,
+      graph: () => graph,
+      isCurrent: () => current,
+      afterApply: async () => {},
+      configuredModel: () => 'codemap-test',
+      selectModels: async () => [
+        model('', {
+          sendRequest: async (messages) => {
+            prompt = JSON.stringify(messages);
+            const text =
+              'Need more source.\n\n```codemap-actions\n' +
+              JSON.stringify([
+                {
+                  kind: 'addContext',
+                  targets: [{ path: other.path }],
+                  reason: 'Read the imported implementation',
+                },
+                {
+                  kind: 'focus',
+                  paths: [included.path, other.path],
+                  reason: 'Compare dependencies',
+                },
+              ]) +
+              '\n```';
+            return {
+              text: (async function* () {
+                yield text;
+              })(),
+              stream: (async function* () {})(),
+            };
+          },
+        }),
+      ],
+    });
+    try {
+      await session.handle({
+        type: 'aiRequest',
+        rootId: graph.root.id,
+        contextId: 'ctx',
+        requestId: 'suggest',
+        question: 'What source is missing?',
+        mode: 'ask',
+      });
+      assert.ok(prompt.includes('UNTRUSTED GRAPH CATALOG'));
+      const conversation = events.find((m) => m.type === 'aiConversation');
+      assert.ok(conversation?.type === 'aiConversation');
+      assert.equal(conversation.turns[0].actions?.length, 2);
+      assert.ok(!conversation.turns[0].answer.includes('codemap-actions'));
+      assert.ok(!events.some((m) => m.type === 'aiAction'));
+      const click = (actionId: string) =>
+        session.handle({
+          type: 'aiExecuteAction',
+          rootId: graph.root.id,
+          regionKey: context.regionKey,
+          requestId: 'suggest',
+          actionId,
+        });
+      await click('forged');
+      assert.equal(events.at(-1)?.type, 'aiActionError');
+      await click('action-1');
+      assert.equal(events.at(-1)?.type, 'aiAction');
+      await click('action-0');
+      const expanded = contextRegionKey(graph.root.id, [included.id, other.id]);
+      await session.handle({ type: 'aiHistory', rootId: graph.root.id, regionKey: expanded });
+      const fork = events.at(-1);
+      assert.ok(fork?.type === 'aiConversation');
+      assert.equal(fork.turns.length, 1);
+      assert.deepEqual(fork.turns[0].actions, []);
+      current = false;
+      await click('action-1');
+      assert.equal(events.at(-1)?.type, 'aiActionError');
+      current = true;
+      graph.revision++;
+      await click('action-1');
+      assert.equal(events.at(-1)?.type, 'aiActionError');
+    } finally {
+      session.dispose();
+    }
+  });
   test('all four graph tools register with the extension', async () => {
     const extension = vscode.extensions.all.find((e) => e.packageJSON.name === 'codemap-ai')!;
     await extension.activate();

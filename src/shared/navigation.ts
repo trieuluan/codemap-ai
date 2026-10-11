@@ -12,6 +12,7 @@ export interface NavigationLocation {
   overviewDepth?: number;
   viewport?: GraphViewState['viewport'];
   path?: string[];
+  region?: string[];
   symbolsFileId?: string;
   symbol?: SymbolAnchor;
   impact?: { nodeId: string; symbol?: SymbolAnchor };
@@ -31,6 +32,15 @@ export function readLocation(value: unknown): NavigationLocation | undefined {
   if (
     item.path !== undefined &&
     (!Array.isArray(item.path) || item.path.some((id) => typeof id !== 'string'))
+  ) {
+    return;
+  }
+  if (
+    item.region !== undefined &&
+    (!Array.isArray(item.region) ||
+      !item.region.length ||
+      item.region.length > 10000 ||
+      item.region.some((id) => typeof id !== 'string'))
   ) {
     return;
   }
@@ -64,6 +74,7 @@ export function readLocation(value: unknown): NavigationLocation | undefined {
     positions: geometry.positions,
     peek: item.peek.slice(0, 10000),
     path: item.path?.slice(0, 10000),
+    region: item.region,
     symbolsFileId: item.symbolsFileId,
     symbol: item.symbol
       ? { nodeId: item.symbol.nodeId, name: item.symbol.name, kind: item.symbol.kind }
@@ -99,6 +110,7 @@ export function reconcileLocation(location: NavigationLocation, graph: GraphSnap
   const validPath = location.path?.every(
     (id, i, path) => ids.has(id) && (!i || edges.has(JSON.stringify([path[i - 1], id]))),
   );
+  const region = location.region?.filter((id) => ids.has(id));
   const path = validPath ? location.path : undefined;
   const symbolsFileId = ids.has(location.symbolsFileId ?? '') ? location.symbolsFileId : undefined;
   const impact =
@@ -121,6 +133,7 @@ export function reconcileLocation(location: NavigationLocation, graph: GraphSnap
     ),
   );
   const stale = !!(
+    (location.region && region?.length !== location.region.length) ||
     (location.path && !validPath) ||
     (location.symbolsFileId && !symbolsFileId) ||
     (location.view.selected && location.view.selected !== view.selected) ||
@@ -138,6 +151,7 @@ export function reconcileLocation(location: NavigationLocation, graph: GraphSnap
           )
         : undefined,
       path,
+      region: region?.length ? region : undefined,
       symbolsFileId,
       impact,
       symbol: resolveAnchor(graph, location.symbol) ? location.symbol : undefined,
@@ -145,7 +159,7 @@ export function reconcileLocation(location: NavigationLocation, graph: GraphSnap
       group:
         location.group && projectGroupExists(location.group, graph) ? location.group : undefined,
       peek: location.peek.filter((id) => projectGroupExists(id, graph)),
-      positions: path || symbolsFileId || location.overviewDepth ? positions : {},
+      positions: region?.length || path || symbolsFileId || location.overviewDepth ? positions : {},
       viewport: stale ? undefined : location.viewport,
     },
     stale,
@@ -178,6 +192,7 @@ export class NavigationHistory {
         value.view.depth,
         value.view.selected,
         value.path,
+        value.region,
         value.symbolsFileId,
         value.symbol,
         value.impact,

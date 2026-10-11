@@ -12,6 +12,7 @@ await runTests({
   extensionTestsPath: resolve(root, 'out/test/live-ai.js'),
   extensionTestsEnv: {
     CODEMAP_LIVE_REPORT: report,
+    ...(process.argv.includes('--workflow') ? { CODEMAP_LIVE_WORKFLOW: '1' } : {}),
     ...(process.env.CODEMAP_TEST_MODEL_ID
       ? { CODEMAP_TEST_MODEL_ID: process.env.CODEMAP_TEST_MODEL_ID }
       : {}),

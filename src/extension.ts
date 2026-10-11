@@ -43,6 +43,7 @@ export class CodeMapPanel implements vscode.Disposable {
       log: (message) => this.log(message),
       context: (rootId, contextId) => this.reviewedContext(rootId, contextId),
       graph: () => this.snapshot,
+      isCurrent: () => this.syncState === 'up-to-date' && !this.disposed,
       afterApply: async () => {
         await this.controller?.refresh();
       },

@@ -1,5 +1,13 @@
 # Change Log
 
+## 0.7.0
+
+- Add validated AI suggestions to request file/symbol context, focus files, show directed import paths, inspect declarations and analyze impact.
+- Send a bounded, previewable graph metadata index for Ask; unselected source is never read automatically.
+- Continue the current conversation when explicitly adding suggested context; stale suggestions are disabled and rejected by the host.
+- Preserve the base layout with temporary file focus and support focus in navigation/Saved Views.
+- Add action validation/regression coverage and an opt-in synthetic live AI workflow check.
+
 ## 0.6.0
 
 - Add source-free model connection diagnostics and an opt-in live smoke test.

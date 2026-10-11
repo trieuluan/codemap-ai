@@ -1,3 +1,4 @@
+import { actionCatalog, type AiGraphAction } from '../../shared/ai-actions';
 import { useContextPreview } from '../hooks/useContextPreview';
 import { AiAssistant } from './AiAssistant';
 import React, { useMemo, useState } from 'react';
@@ -14,6 +15,8 @@ export function ContextPanel({
   onClose,
   sync,
   selectedSymbol,
+  onAdd,
+  onGraphAction,
 }: {
   snapshot: GraphSnapshot;
   selected: string[];
@@ -22,7 +25,10 @@ export function ContextPanel({
   onClose: () => void;
   sync: SyncState;
   selectedSymbol?: { nodeId: string; symbolId: string };
+  onAdd: (ids: string[]) => void;
+  onGraphAction: (action: AiGraphAction) => void;
 }) {
+  const [added, setAdded] = useState<string[]>([]);
   const [focused, setFocused] = useState(true);
   const [symbolChoice, setSymbolChoice] = useState<string>();
   const [query, setQuery] = useState('');
@@ -55,6 +61,10 @@ export function ContextPanel({
       mode: focused ? 'focused' : 'full',
       symbol: focus ? { nodeId: focus.nodeId, symbolId: focus.symbolId } : undefined,
     });
+  const graphIndex = useMemo(
+    () => (bundle ? actionCatalog(snapshot, bundle) : undefined),
+    [snapshot, bundle],
+  );
   const matches = snapshot.nodes
     .filter(
       (file) =>
@@ -241,7 +251,37 @@ export function ContextPanel({
             {message}
           </p>
         )}
+        {!!added.length && (
+          <p className="ai-context-added" role="status">
+            Added to context: {added.join(', ')}. The next Ask reads fresh source; nothing was sent
+            automatically.
+          </p>
+        )}
+        <p className="helper-text">
+          Ask also sends a bounded graph index of file paths, declaration names and import pairs to
+          suggest what to explore. Source from unselected files is never read for that index.
+        </p>
         <AiAssistant
+          onAction={(action) => {
+            if (action.kind !== 'addContext') {
+              onGraphAction(action);
+              return;
+            }
+            const ids = action.targets.map((t) => t.fileId);
+            onAdd(ids);
+            setExcluded((current) => current.filter((id) => !ids.includes(id)));
+            const target = action.targets.find((t) => t.symbol);
+            if (target?.symbol) {
+              const symbol = snapshot.nodes
+                .find((n) => n.id === target.fileId)
+                ?.declarations?.find((s) => s.id === target.symbol!.id);
+              if (symbol) {
+                setSymbolChoice(JSON.stringify([target.fileId, symbol.kind, symbol.name]));
+                setFocused(true);
+              }
+            }
+            setAdded(action.targets.map((t) => t.path));
+          }}
           prepareContext={prepare}
           regionKey={regionKey}
           conversationKey={conversationKey}
@@ -258,6 +298,20 @@ export function ContextPanel({
               {bundle.estimatedTokens?.toLocaleString()} source tokens (estimate) ·{' '}
               {bundle.mode ?? 'full'} · revision {bundle.revision}
             </p>
+            <details className="context-source">
+              <summary>Graph index · {graphIndex?.files.length} files · metadata only</summary>
+              <p className="helper-text">
+                Used for Ask suggestions; not source evidence. Up to 80 files and 200 import pairs.{' '}
+                {graphIndex?.omitted} files omitted.
+              </p>
+              {graphIndex?.files.map((file) => (
+                <p className="helper-text" key={file.path}>
+                  {file.path}
+                  {file.included ? ' · source included' : ' · source not included'}
+                  {file.symbols.length ? ` · ${file.symbols.join(', ')}` : ''}
+                </p>
+              ))}
+            </details>
             {bundle.warnings.map((warning, i) => (
               <p className="context-warning" key={i}>
                 {warning}

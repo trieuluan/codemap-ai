@@ -1,3 +1,5 @@
+import { AiActions } from './AiActions';
+import type { AiGraphAction } from '../../shared/ai-actions';
 import type { AiTurn } from '../../shared/conversation';
 import { AiMarkdown } from './AiMarkdown';
 import type { PreparedContext } from '../hooks/useContextPreview';
@@ -8,6 +10,7 @@ import { send } from '../bridge';
 
 export function AiAssistant({
   prepareContext,
+  onAction,
   regionKey,
   conversationKey,
   rootId,
@@ -16,6 +19,7 @@ export function AiAssistant({
   sync,
 }: {
   prepareContext: (action?: 'ask' | 'propose') => Promise<PreparedContext>;
+  onAction: (action: AiGraphAction) => void;
   regionKey: string;
   conversationKey: string;
   rootId: string;
@@ -33,6 +37,11 @@ export function AiAssistant({
     maxInputTokens: number;
     historyTurns: number;
   }>();
+  const [pendingAction, setPendingAction] = useState<string>();
+  const actionHandler = useRef(onAction);
+  actionHandler.current = onAction;
+  const currentGraph = useRef({ rootId, revision });
+  currentGraph.current = { rootId, revision };
   const [copied, setCopied] = useState('');
   const conversation = useRef(conversationKey);
   conversation.current = conversationKey;
@@ -54,7 +63,19 @@ export function AiAssistant({
   useEffect(() => {
     const receive = (event: MessageEvent<HostMessage>) => {
       const value = event.data;
-      if (value.type === 'aiConversation' && value.regionKey === conversation.current) {
+      if (value.type === 'aiAction') {
+        setPendingAction(undefined);
+        if (
+          value.rootId === currentGraph.current.rootId &&
+          value.revision === currentGraph.current.revision &&
+          value.regionKey === conversation.current
+        ) {
+          actionHandler.current(value.action);
+        }
+      } else if (value.type === 'aiActionError') {
+        setPendingAction(undefined);
+        setError(value.message);
+      } else if (value.type === 'aiConversation' && value.regionKey === conversation.current) {
         setTurns(value.turns);
       } else if (value.type === 'aiConnection') {
         setConnection(value);
@@ -103,6 +124,7 @@ export function AiAssistant({
     send({ type: 'aiCancel' });
     request.current = undefined;
     proposalId.current = undefined;
+    setPendingAction(undefined);
     setBusy(false);
     setPreparing(false);
     setApplying(false);
@@ -377,6 +399,22 @@ export function AiAssistant({
                   references={turn.references}
                   onReference={stale ? undefined : open}
                   onCopy={copy}
+                />
+                <AiActions
+                  actions={turn.actions}
+                  warnings={turn.actionWarnings}
+                  disabled={stale || busy || applying}
+                  pending={pendingAction}
+                  onRun={(action) => {
+                    setPendingAction(action.id);
+                    send({
+                      type: 'aiExecuteAction',
+                      requestId: turn.id,
+                      actionId: action.id,
+                      rootId,
+                      regionKey: conversationKey,
+                    });
+                  }}
                 />
               </article>
             );

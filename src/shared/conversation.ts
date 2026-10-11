@@ -1,3 +1,4 @@
+import type { AiGraphAction } from './ai-actions';
 import type { AiReference } from './ai';
 export interface AiTurn {
   id: string;
@@ -7,6 +8,8 @@ export interface AiTurn {
   model: string;
   createdAt: string;
   references: AiReference[];
+  actions?: AiGraphAction[];
+  actionWarnings?: string[];
   error?: string;
 }
 /** Session memory only: no source, prompts or replies are written to workspace storage. */

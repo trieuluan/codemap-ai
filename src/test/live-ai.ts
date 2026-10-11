@@ -1,3 +1,4 @@
+import { liveWorkflow } from './live-workflow';
 import * as vscode from 'vscode';
 import { writeFileSync } from 'node:fs';
 import { AiSession } from '../ai/session';
@@ -42,6 +43,16 @@ export async function run() {
       try {
         report.status = (await session.testConnection()) ? 'passed' : 'failed';
         report.events = events;
+        if (report.status === 'passed' && process.env.CODEMAP_LIVE_WORKFLOW === '1') {
+          report.sourceSent = true;
+          report.sourceKind = 'disposable synthetic fixture only';
+          report.workspaceSourceSent = false;
+          const workflow = await liveWorkflow(model);
+          report.workflow = workflow;
+          if (workflow.status !== 'passed') {
+            report.status = 'failed';
+          }
+        }
       } finally {
         session.dispose();
       }

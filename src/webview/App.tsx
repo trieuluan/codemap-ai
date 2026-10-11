@@ -1,3 +1,4 @@
+import type { AiGraphAction } from '../shared/ai-actions';
 import { ArchitecturePanel, ArchitectureNodeLabel } from './components/ArchitecturePanel';
 import { ContextPanel } from './components/ContextPanel';
 import { readLibrary, targetKey } from '../shared/library';
@@ -70,24 +71,28 @@ export function App() {
   const [edgeSelection, setEdgeSelection] = useState<string>();
   const [activeFileId, setActiveFileId] = useState<string>();
   const [revealRequest, setRevealRequest] = useState<{ nodeId: string }>();
+  const [aiRegion, setAiRegion] = useState<string[]>();
   const [tracePath, setTracePath] = useState<string[]>();
   const [symbolsFileId, setSymbolsFileId] = useState<string>();
   const [selectedSymbolId, setSelectedSymbolId] = useState<string>();
   const [impactTarget, setImpactTarget] = useState<ImpactTarget>();
   const inspectionPositions = useRef<GraphViewState['positions']>({});
-  const inspecting = !!tracePath || !!symbolsFileId || overviewOpen;
-  const canvasKey = overviewOpen
-    ? `architecture:${overviewDepth}`
-    : tracePath
-      ? `path:${JSON.stringify(tracePath)}`
-      : symbolsFileId
-        ? `symbols:${symbolsFileId}`
-        : layoutKey(view);
+  const inspecting = !!aiRegion || !!tracePath || !!symbolsFileId || overviewOpen;
+  const canvasKey = aiRegion
+    ? `region:${JSON.stringify(aiRegion)}`
+    : overviewOpen
+      ? `architecture:${overviewDepth}`
+      : tracePath
+        ? `path:${JSON.stringify(tracePath)}`
+        : symbolsFileId
+          ? `symbols:${symbolsFileId}`
+          : layoutKey(view);
   const clearInspection = (record = true) => {
     if (record) {
       history.begin();
     }
     setOverviewOpen(false);
+    setAiRegion(undefined);
     setTracePath(undefined);
     setSymbolsFileId(undefined);
     setSelectedSymbolId(undefined);
@@ -96,6 +101,7 @@ export function App() {
     readyToSaveViewport.current = false;
   };
   const showPath = (path: string[]) => {
+    setAiRegion(undefined);
     setOverviewOpen(false);
     history.begin();
     pendingCenter.current = undefined;
@@ -141,6 +147,7 @@ export function App() {
       overviewDepth: overviewOpen ? overviewDepth : undefined,
       viewport: flow.getViewport(),
       path: tracePath,
+      region: aiRegion,
       symbolsFileId,
       symbol: selected
         ? { nodeId: selected.nodeId, name: selected.symbol.name, kind: selected.symbol.kind }
@@ -174,6 +181,7 @@ export function App() {
     if (location.overviewDepth) {
       setOverviewDepth(location.overviewDepth);
     }
+    setAiRegion(location.region);
     setTracePath(location.path);
     setSymbolsFileId(location.symbolsFileId);
     const symbol = resolveAnchor(snapshot, location.symbol);
@@ -350,15 +358,23 @@ export function App() {
     if (!snapshot) {
       return { nodes: [], edges: [], visibleFiles: 0 };
     }
-    const source = tracePath
-      ? graphForPath(snapshot, tracePath)
-      : symbolsFileId
-        ? {
-            ...snapshot,
-            nodes: snapshot.nodes.filter((node) => node.id === symbolsFileId),
-            edges: [],
-          }
-        : snapshot;
+    const source = aiRegion
+      ? {
+          ...snapshot,
+          nodes: snapshot.nodes.filter((n) => aiRegion.includes(n.id)),
+          edges: snapshot.edges.filter(
+            (e) => aiRegion.includes(e.source) && aiRegion.includes(e.target),
+          ),
+        }
+      : tracePath
+        ? graphForPath(snapshot, tracePath)
+        : symbolsFileId
+          ? {
+              ...snapshot,
+              nodes: snapshot.nodes.filter((node) => node.id === symbolsFileId),
+              edges: [],
+            }
+          : snapshot;
     const state = inspecting
       ? {
           ...view,
@@ -385,6 +401,7 @@ export function App() {
     contextFile?.id,
     peekGroups,
     tracePath,
+    aiRegion,
     symbolsFileId,
     filesById,
     overviewOpen,
@@ -781,7 +798,9 @@ export function App() {
                 ? 'Architecture overview'
                 : tracePath
                   ? 'Import / impact path'
-                  : 'Symbol declarations'}
+                  : aiRegion
+                    ? 'AI file focus'
+                    : 'Symbol declarations'}
             </strong>
             <span>Temporary canvas · saved layout is preserved</span>
             <button onClick={() => clearInspection()}>Back to graph</button>
@@ -948,6 +967,55 @@ export function App() {
                 )
                 .find((s) => s.canvasId === selectedSymbolId)}
               sync={sync}
+              onAdd={addContext}
+              onGraphAction={(action: AiGraphAction) => {
+                if (!snapshot) {
+                  return;
+                }
+                if (action.kind === 'path') {
+                  showPath(action.fileIds);
+                  return;
+                }
+                if (action.kind === 'focus') {
+                  clearInspection();
+                  setAiRegion(action.fileIds);
+                  setImpactTarget(undefined);
+                  setGroupSelection(undefined);
+                  setEdgeSelection(undefined);
+                  pendingCenter.current = undefined;
+                  fitMembers.current = undefined;
+                  arrangePeek.current = true;
+                  return;
+                }
+                if (action.kind === 'inspect' || action.kind === 'impact') {
+                  const target = action.target;
+                  const node = snapshot.nodes.find((n) => n.id === target.fileId);
+                  if (!node) {
+                    return;
+                  }
+                  selectFile(node.id);
+                  if (action.kind === 'impact') {
+                    setContextOpen(false);
+                    setImpactTarget({ nodeId: node.id, symbolId: target.symbol?.id });
+                  } else {
+                    setContextOpen(false);
+                    setAiRegion(undefined);
+                    setTracePath(undefined);
+                    setSymbolsFileId(node.id);
+                    setSelectedSymbolId(
+                      target.symbol ? symbolNodeId(node.id, target.symbol.id) : undefined,
+                    );
+                    pendingCenter.current = undefined;
+                    fitMembers.current = target.symbol
+                      ? [node.id, symbolNodeId(node.id, target.symbol.id)]
+                      : [node.id];
+                    inspectionPositions.current = {};
+                    arrangePeek.current = true;
+                    needsViewport.current = true;
+                    readyToSaveViewport.current = false;
+                  }
+                }
+              }}
               onToggle={(id) =>
                 setContextIds((current) =>
                   current.includes(id) ? current.filter((item) => item !== id) : [...current, id],
@@ -1041,6 +1109,7 @@ export function App() {
                 if (!file || !snapshot) {
                   return;
                 }
+                setAiRegion(undefined);
                 setTracePath(undefined);
                 setSymbolsFileId(file.id);
                 setSelectedSymbolId(undefined);

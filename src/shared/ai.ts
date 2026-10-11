@@ -1,3 +1,4 @@
+import type { AiGraphAction } from './ai-actions';
 import type { AiTurn } from './conversation';
 import { contextMarkdown, type ContextBundle } from './context';
 
@@ -33,11 +34,27 @@ export type AiUiMessage =
       mode: 'ask' | 'propose';
     }
   | { type: 'aiHistory' | 'aiClearHistory'; rootId: string; regionKey: string }
+  | {
+      type: 'aiExecuteAction';
+      requestId: string;
+      actionId: string;
+      rootId: string;
+      regionKey: string;
+    }
   | { type: 'aiCopy'; requestId: string; text: string }
   | { type: 'aiDiff'; proposalId: string; fileId: string }
   | { type: 'aiApply'; proposalId: string }
   | { type: 'aiOpenReference'; requestId: string; fileId: string; line: number };
 export type AiHostMessage =
+  | {
+      type: 'aiAction';
+      rootId: string;
+      revision: number;
+      requestId: string;
+      regionKey: string;
+      action: AiGraphAction;
+    }
+  | { type: 'aiActionError'; requestId: string; message: string }
   | {
       type: 'aiConnection';
       state: 'idle' | 'checking' | 'ready' | 'error';
@@ -170,6 +187,16 @@ export function readAiMessage(value: unknown): AiUiMessage | undefined {
     case 'aiHistory':
     case 'aiClearHistory':
       if (string('rootId') && string('regionKey', 50000)) {
+        return value as AiUiMessage;
+      }
+      break;
+    case 'aiExecuteAction':
+      if (
+        string('requestId', 200) &&
+        string('actionId', 200) &&
+        string('rootId') &&
+        string('regionKey', 50000)
+      ) {
         return value as AiUiMessage;
       }
       break;

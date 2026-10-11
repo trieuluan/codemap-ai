@@ -1,3 +1,10 @@
+import {
+  actionCatalog,
+  actionInstructions,
+  parseAiActions,
+  actionStillValid,
+  type AiGraphAction,
+} from '../shared/ai-actions';
 import { ConversationStore } from '../shared/conversation';
 import { contextRegionKey } from '../shared/context';
 import * as vscode from 'vscode';
@@ -21,6 +28,7 @@ export interface AiSessionOptions {
   graph: () => GraphSnapshot | undefined;
   afterApply: () => Promise<void>;
   log?: (message: string) => void;
+  isCurrent?: () => boolean;
   configuredModel?: () => string;
   selectModels?: (
     selector?: vscode.LanguageModelChatSelector,
@@ -35,7 +43,12 @@ export class AiSession implements vscode.Disposable {
   private conversations = new ConversationStore();
   private answers = new Map<
     string,
-    { bundle: ContextBundle; text: string; references: ReturnType<typeof aiReferences> }
+    {
+      bundle: ContextBundle;
+      text: string;
+      references: ReturnType<typeof aiReferences>;
+      actions: AiGraphAction[];
+    }
   >();
   private checking?: vscode.CancellationTokenSource;
   private previews = new Map<string, string>();
@@ -178,6 +191,84 @@ export class AiSession implements vscode.Disposable {
           type: 'aiConversation',
           regionKey: message.regionKey,
           turns: this.conversations.get(message.regionKey),
+        });
+        break;
+      }
+      case 'aiExecuteAction': {
+        const saved = this.answers.get(message.requestId);
+        const graph = this.options.graph();
+        const action = saved?.actions.find((a) => a.id === message.actionId);
+        const key =
+          saved &&
+          (saved.bundle.regionKey ??
+            contextRegionKey(
+              saved.bundle.rootId,
+              saved.bundle.files.map((f) => f.id),
+            ));
+        if (
+          this.options.isCurrent?.() === false ||
+          !saved ||
+          !graph ||
+          !action ||
+          graph.root.id !== message.rootId ||
+          saved.bundle.rootId !== message.rootId ||
+          key !== message.regionKey ||
+          graph.revision !== saved.bundle.revision ||
+          !actionStillValid(action, graph)
+        ) {
+          this.options.post({
+            type: 'aiActionError',
+            requestId: message.requestId,
+            message:
+              'Suggestion expired or is outside the current region. Ask again with fresh context.',
+          });
+          break;
+        }
+        if (action.kind === 'addContext') {
+          const region = JSON.parse(key!) as [string, string[], string];
+          const ids = [...new Set([...region[1], ...action.targets.map((t) => t.fileId)])];
+          if (ids.length > 50) {
+            this.options.post({
+              type: 'aiActionError',
+              requestId: message.requestId,
+              message: 'Context supports at most 50 files. Remove some files before adding more.',
+            });
+            break;
+          }
+          const focused = action.targets.find((t) => t.symbol);
+          const declaration =
+            focused &&
+            graph.nodes
+              .find((n) => n.id === focused.fileId)
+              ?.declarations?.find((s) => s.id === focused.symbol!.id);
+          const nextKey = contextRegionKey(
+            graph.root.id,
+            ids,
+            declaration && focused
+              ? `${focused.fileId}:${declaration.kind}:${declaration.name}`
+              : region[2],
+          );
+          if (nextKey !== key) {
+            for (const turn of [...this.conversations.get(key!)]) {
+              this.conversations.add(nextKey, {
+                ...turn,
+                actions: [],
+                actionWarnings: turn.actions?.length
+                  ? ['Context expanded. Ask again for suggestions using the new selection.']
+                  : turn.actionWarnings,
+              });
+            }
+            this.pruneAnswers();
+          }
+        }
+        // Only approved IDs from an archived answer can reach the graph UI.
+        this.options.post({
+          type: 'aiAction',
+          rootId: graph.root.id,
+          revision: graph.revision,
+          requestId: message.requestId,
+          regionKey: message.regionKey,
+          action,
         });
         break;
       }
@@ -344,6 +435,8 @@ export class AiSession implements vscode.Disposable {
       answer: string,
       references: ReturnType<typeof aiReferences>,
       error?: string,
+      actions: AiGraphAction[] = [],
+      actionWarnings: string[] = [],
     ) => {
       if (!context || this.disposed) {
         return;
@@ -362,9 +455,11 @@ export class AiSession implements vscode.Disposable {
         model: this.model?.name ?? '',
         createdAt: new Date().toISOString(),
         references,
+        actions,
+        actionWarnings,
         error,
       });
-      this.answers.set(message.requestId, { bundle: context, text: answer, references });
+      this.answers.set(message.requestId, { bundle: context, text: answer, references, actions });
       this.pruneAnswers();
       this.options.post({
         type: 'aiConversation',
@@ -416,8 +511,16 @@ export class AiSession implements vscode.Disposable {
               .filter((t) => !t.error)
               .slice(-4)
           : [];
+      const graph = this.options.graph();
+      const catalog =
+        message.mode === 'ask' &&
+        graph?.root.id === bundle.rootId &&
+        graph.revision === bundle.revision
+          ? actionCatalog(graph, bundle)
+          : undefined;
       const prompt = vscode.LanguageModelChatMessage.User(
-        aiPrompt(bundle, message.question, message.mode),
+        aiPrompt(bundle, message.question, message.mode) +
+          (catalog ? '\n\n' + actionInstructions(catalog) : ''),
       );
       const messages = history.flatMap((turn) => [
         vscode.LanguageModelChatMessage.User(turn.question),
@@ -468,7 +571,10 @@ export class AiSession implements vscode.Disposable {
           this.options.post({
             type: 'aiProgress',
             requestId: message.requestId,
-            text,
+            text:
+              message.mode === 'ask'
+                ? text.replace(/^```codemap-actions[\s\S]*$/m, '').trimEnd()
+                : text,
             done: false,
           });
           publishedAt = Date.now();
@@ -483,12 +589,17 @@ export class AiSession implements vscode.Disposable {
       if (proposal) {
         this.proposal = { value: proposal, bundle };
       }
-      const references = proposal ? [] : aiReferences(text, bundle);
-      remember(proposal ? proposal.summary : text, references);
+      const parsed =
+        catalog && graph
+          ? parseAiActions(text, graph, catalog)
+          : { answer: text, actions: [], warnings: [] };
+      const answer = proposal ? proposal.summary : parsed.answer;
+      const references = proposal ? [] : aiReferences(answer, bundle);
+      remember(answer, references, undefined, proposal ? [] : parsed.actions, parsed.warnings);
       this.options.post({
         type: 'aiProgress',
         requestId: message.requestId,
-        text: proposal ? proposal.summary : text,
+        text: answer,
         done: true,
         proposal,
         references,

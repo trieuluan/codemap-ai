@@ -2,7 +2,7 @@
   "name": "codemap-ai",
   "displayName": "codemap-ai",
   "description": "Explore TypeScript and JavaScript source dependencies as an interactive graph.",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "engines": {
     "vscode": "^1.140.0"
   },
@@ -153,7 +153,8 @@
     "benchmark": "pnpm run compile-tests && node scripts/benchmark.mjs",
     "format": "prettier --write \"src/**/*.{ts,tsx,css}\" \"scripts/*.mjs\" \"*.{js,mjs,json}\" \".vscode/*.json\"",
     "format:check": "prettier --check \"src/**/*.{ts,tsx,css}\" \"scripts/*.mjs\" \"*.{js,mjs,json}\" \".vscode/*.json\"",
-    "test:ai:live": "pnpm run compile-tests && pnpm run compile && node scripts/live-model-smoke.mjs"
+    "test:ai:live": "pnpm run compile-tests && pnpm run compile && node scripts/live-model-smoke.mjs",
+    "test:ai:workflow": "pnpm run compile-tests && pnpm run compile && node scripts/live-model-smoke.mjs --workflow"
   },
   "devDependencies": {
     "@types/mocha": "^10.0.10",

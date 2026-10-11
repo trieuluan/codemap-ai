@@ -1143,3 +1143,45 @@ button.ai-inline-citation {
   margin: 0 2px;
   border-radius: 4px;
 }
+
+.ai-graph-actions {
+  display: grid;
+  gap: 10px;
+  margin-top: 18px;
+}
+.ai-action-card {
+  padding: 12px;
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: 8px;
+  background: var(--vscode-editor-background);
+}
+.ai-action-card > strong {
+  font-size: 12px;
+}
+.ai-action-card p {
+  margin: 6px 0 10px;
+  color: var(--vscode-descriptionForeground);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.ai-action-card ul {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 10px;
+  display: grid;
+  gap: 4px;
+}
+.ai-action-card li {
+  overflow-wrap: anywhere;
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 11px;
+}
+.ai-action-card button {
+  width: 100%;
+}
+.ai-context-added {
+  border-left: 2px solid var(--vscode-focusBorder);
+  padding: 8px 12px;
+  font-size: 12px;
+  line-height: 1.5;
+}

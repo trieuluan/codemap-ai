@@ -1,6 +1,6 @@
 # CodeMap AI
 
-Explore TypeScript and JavaScript file dependencies as an interactive graph inside VS Code. v0.6 adds AI questions and reviewed code proposals through VS Code models, alongside Architecture Overview, navigation history, Saved Views, architecture notes, symbol exploration and impact analysis.
+Explore TypeScript and JavaScript file dependencies as an interactive graph inside VS Code. v0.7 adds AI suggestions that navigate the graph and request more context, building on AI questions and reviewed code proposals through VS Code models, alongside Architecture Overview, navigation history, Saved Views, architecture notes, symbol exploration and impact analysis.
 
 ## Run locally
 
@@ -161,7 +161,7 @@ A source change/Refresh invalidates the preview; wait for synchronization and re
 
 1. Open **Context**, select files (Shift-click on the graph or search in the panel), then enter a question directly. **Preview context** is optional; Preview and Copy Markdown remain local.
 2. Use **Change model** or **CodeMap: Choose AI Model**. Choose a model exposed through the VS Code Language Model API. Enable/sign in to a compatible provider if none are available. An installed AI extension does not necessarily expose its models to other extensions. No CodeMap API key is required; the provider handles authorization and quotas. The selected model ID is stored in the `codemap.ai.model` user setting.
-3. Enter a question and click **Ask selection**. Context is prepared automatically from the included files when you submit; only that context and your prompt are sent. Answers render Markdown headings, lists, code blocks and GFM tables. Use Ask/Edit to switch action; ⌘/Ctrl+Enter submits. Replies stream into the panel; **Stop** cancels the request. Valid `[[path:L12]]` citations appear as source buttons. Source links are restricted to reviewed files and valid lines; generated explanations still need review. Replies support **Copy**, **Copy code** and inline source citations. Ask includes up to four successful prior turns from the same file/symbol region; oldest turns are dropped when the token budget requires it. Each follow-up uses freshly prepared source context.
+3. Enter a question and click **Ask selection**. Context is prepared automatically from the included files when you submit; Ask sends that context, your prompt, bounded conversation history and a graph metadata index described below. Edit sends full selected source and its prompt. Answers render Markdown headings, lists, code blocks and GFM tables. Use Ask/Edit to switch action; ⌘/Ctrl+Enter submits. Replies stream into the panel; **Stop** cancels the request. Valid `[[path:L12]]` citations appear as source buttons. Source links are restricted to reviewed files and valid lines; generated explanations still need review. Replies support **Copy**, **Copy code** and inline source citations. Ask includes up to four successful prior turns from the same file/symbol region; oldest turns are dropped when the token budget requires it. Each follow-up uses freshly prepared source context.
 4. Click **Test connection** (or **CodeMap: Test AI Connection**) to verify the selected model with a short request containing no source. Selected means configured; Verified means a request succeeded. Provider authorization/quota errors appear in the panel. Checks stop after 20 seconds.
 5. For an edit, describe the change and click **Propose changes**. Review each **Review diff** in VS Code, then **Apply reviewed changes**. Every diff must be opened before Apply is enabled. Proposals can replace up to 10 existing, complete context files; new files, deletes, renames, project commands and automatic tests are not supported. Source warnings or truncation block proposals. Any context file changed since preview blocks Apply, including unsaved edits to dependencies. Preview and propose again to resolve a conflict.
 
@@ -183,3 +183,24 @@ Conversation history survives graph Refresh and closing/reopening the Context si
 Run `pnpm run test:ai:live` for an optional source-free connection smoke test using an isolated VS Code profile and installed extensions. This profile has no copied login credentials; an unavailable result does not determine model availability in your normal signed-in VS Code window. Use **Test connection** there to verify that profile.
 
 AI-specific automated tests use a fake model and never send source to an AI service. They cover streaming, cancellation, input budgets, unavailable models, stale context, citation validation, proposal validation, diff review, conflicting unsaved edits and Apply. A live model smoke test requires a signed-in provider on your machine.
+
+
+## AI suggestions on the graph (v0.7)
+
+Ask may return **Explore next** cards with a reason and exact targets. Actions are optional; nothing runs until clicked:
+
+- **Add to context** adds up to ten suggested files and optionally prioritizes one symbol. It does not call the model or read additional source automatically. The next Ask prepares fresh context. The current conversation is copied to the expanded region; prior suggestions there are cleared so the next answer can reflect its source.
+- **Focus files** opens a temporary file canvas containing the suggested files and their existing edges. **Back to graph** restores the base layout; focus also participates in navigation and Saved Views.
+- **Show import path** displays a shortest resolved, directed import route between the suggested endpoints. Cycles are supported. No route means the suggestion is ignored.
+- **Inspect symbol** opens the file's declaration canvas and selects the requested symbol.
+- **Analyze impact** opens the existing static impact analysis for the target file/symbol.
+
+Ask includes a metadata-only index of up to 80 graph files, 20 declaration names/file and 200 import pairs. Selected files and direct neighbors are prioritized. Expand **Graph index** in Preview to inspect included paths/names; other-file source is not included. This index allows suggestions about missing source; it does not establish implementation behavior. The entire prompt, including the index and history, is checked against the model's input budget.
+
+Model output must use exact index paths and unambiguous symbol names. Unknown targets, arbitrary commands/URLs, malformed actions and nonexistent import routes are ignored with a message. At most eight cards are accepted. Actions are tied to their answer, root and graph revision; Refresh or pending source changes disable them. Ask again to get current suggestions. Model responses are not guaranteed to contain useful cards.
+
+### Live workflow verification
+
+`pnpm run test:ai:workflow` is an opt-in extension-host check: source-free connection → Explain/citations/context suggestions → follow-up → structured proposal → readonly diff → Apply. It uses disposable synthetic TS files, never workspace source, and restores/removes its temporary buffers/files. When a provider is available this makes model requests subject to its authorization and quotas. Failed model output is reported rather than forced through validation.
+
+Like `test:ai:live`, it starts an isolated profile with installed extensions and does not copy your login credentials. If it reports **unavailable**, use **CodeMap: Test AI Connection** in your normal signed-in development host. Then manually verify a small selected source region with Explain → follow-up → Propose → Review diff → Apply. Automated fake-model coverage does not establish a real provider's response quality.
