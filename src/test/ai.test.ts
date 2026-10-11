@@ -546,6 +546,12 @@ suite('CodeMap AI integration (fake model, no network)', () => {
         fileId: file.id,
         line: 1,
       });
+      assert.ok(
+        events.some(
+          (e) =>
+            e.type === 'aiReferenceOpened' && e.nodeId === file.id && e.rootId === graph.root.id,
+        ),
+      );
       // showTextDocument resolves before selection/activation reaches the UI.
       const editor = () =>
         vscode.window.visibleTextEditors.find(

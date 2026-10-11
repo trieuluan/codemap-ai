@@ -49,7 +49,16 @@ export class CodeMapPanel implements vscode.Disposable {
         this.snapshot ? this.store.get(this.snapshot.root.id).workingSet?.editable : undefined,
       isCurrent: () => this.syncState === 'up-to-date' && !this.disposed,
       afterApply: async () => {
-        await this.controller?.refresh();
+        const controller = this.controller;
+        if (!controller) {
+          throw new Error('Workspace is no longer available.');
+        }
+        await controller.refresh();
+        if (this.disposed || this.controller !== controller || this.syncState !== 'up-to-date') {
+          throw new Error(
+            'Graph synchronization did not finish. Refresh observations again after synchronization.',
+          );
+        }
       },
       previewGraph: async (texts, token) => {
         if (!this.root || !this.snapshot) {

@@ -178,7 +178,10 @@ test('review badges distinguish partial acceptance, reviewed and actually applie
   assert.equal(reviewFileState(review, 'a'), 'Needs review');
   assert.equal(reviewFileState({ ...review, reviewed: ['x'] }, 'a'), 'Reviewed');
   assert.equal(reviewFileState({ ...review, accepted: [] }, 'a'), 'Rejected');
-  assert.equal(reviewFileState({ ...review, state: 'applied', applied: ['x'] }, 'a'), 'Applied');
+  assert.equal(
+    reviewFileState({ ...review, state: 'applied', applied: ['x'] }, 'a'),
+    'Applied earlier',
+  );
   assert.equal(reviewFileState({ ...review, state: 'applied' }, 'a'), 'Rejected');
   assert.equal(reviewFileState(review, 'b'), undefined);
 });

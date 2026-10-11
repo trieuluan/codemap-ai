@@ -1,5 +1,20 @@
 import type { GraphSnapshot } from './model';
 import { analyzeImpact } from './investigation';
+export type AppliedSourceState = 'applied' | 'reverted' | 'modified' | 'unavailable';
+/** Compare whole-file digests; the UI never receives source or digest values. */
+export function appliedSourceState(
+  before: string,
+  applied: string,
+  current?: string,
+): AppliedSourceState {
+  return current === undefined
+    ? 'unavailable'
+    : current === applied
+      ? 'applied'
+      : current === before
+        ? 'reverted'
+        : 'modified';
+}
 export interface ObservedDiagnostic {
   fileId: string;
   path: string;
@@ -18,6 +33,7 @@ export interface TestResult {
   startedAt: string;
   finishedAt?: string;
   saved: boolean;
+  stale?: boolean;
 }
 export interface VerificationReport {
   id: string;
@@ -26,7 +42,8 @@ export interface VerificationReport {
   revision: number;
   observedAt: string;
   stale: boolean;
-  changedFiles: { id: string; path: string }[];
+  refreshing?: boolean;
+  changedFiles: { id: string; path: string; sourceState?: AppliedSourceState }[];
   diagnostics: ObservedDiagnostic[];
   addedDiagnostics: ObservedDiagnostic[];
   removedDiagnostics: ObservedDiagnostic[];
@@ -87,6 +104,10 @@ export function verificationFailureScope(report: VerificationReport | undefined)
     diagnostics: new Set(
       report.diagnostics.filter((d) => d.severity === 'error').map((d) => d.fileId),
     ),
-    testScope: new Set(report.test?.state === 'failed' ? report.changedFiles.map((f) => f.id) : []),
+    testScope: new Set(
+      report.test?.state === 'failed' && !report.test.stale
+        ? report.changedFiles.map((f) => f.id)
+        : [],
+    ),
   };
 }

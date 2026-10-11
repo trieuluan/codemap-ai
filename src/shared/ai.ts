@@ -44,6 +44,7 @@ export type AiUiMessage =
     }
   | { type: 'aiRunTest'; reportId: string; save: boolean }
   | { type: 'aiStopTest' }
+  | { type: 'aiRecheckVerification'; reportId: string }
   | { type: 'aiOpenDiagnostic'; reportId: string; index: number }
   | { type: 'aiCopy'; requestId: string; text: string }
   | { type: 'aiDiff'; proposalId: string; fileId: string; changeId?: string }
@@ -51,6 +52,7 @@ export type AiUiMessage =
   | { type: 'aiApply'; proposalId: string; changeIds?: string[] }
   | { type: 'aiOpenReference'; requestId: string; fileId: string; line: number };
 export type AiHostMessage =
+  | { type: 'aiReferenceOpened'; rootId: string; nodeId: string; requestId: string }
   | {
       type: 'aiGraphPreview';
       proposalId: string;
@@ -220,6 +222,11 @@ export function readAiMessage(value: unknown): AiUiMessage | undefined {
         value.index >= 0 &&
         value.index < 100
       ) {
+        return value as AiUiMessage;
+      }
+      break;
+    case 'aiRecheckVerification':
+      if (string('reportId', 200)) {
         return value as AiUiMessage;
       }
       break;

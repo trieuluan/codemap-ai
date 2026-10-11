@@ -86,6 +86,7 @@ export function App() {
   const [contextId, setContextId] = useState<string>();
   const [peekGroups, setPeekGroups] = useState<string[]>([]);
   const [edgeSelection, setEdgeSelection] = useState<string>();
+  const [effectiveSourceIds, setEffectiveSourceIds] = useState<string[]>([]);
   const [activeFileId, setActiveFileId] = useState<string>();
   const [revealRequest, setRevealRequest] = useState<{ nodeId: string }>();
   const [aiRegion, setAiRegion] = useState<string[]>();
@@ -95,6 +96,7 @@ export function App() {
   const [verification, setVerification] = useState<VerificationReport>();
   const failureScope = useMemo(() => verificationFailureScope(verification), [verification]);
   const [codingPlan, setCodingPlan] = useState<CodingPlan>();
+  const reviewConversation = useRef<string | undefined>(undefined);
   const [review, setReview] = useState<ReviewState>();
   const [graphPreview, setGraphPreview] =
     useState<Extract<HostMessage, { type: 'aiGraphPreview' }>>();
@@ -131,6 +133,17 @@ export function App() {
       setGraphLayer('current');
     }
   }, [graphLayer, graphPreview, review, snapshot?.revision]);
+  useEffect(() => {
+    if (
+      graphLayer === 'applied' &&
+      (!review ||
+        verification?.proposalId !== review.proposal.id ||
+        verification.stale ||
+        verification.changedFiles.some((f) => f.sourceState && f.sourceState !== 'applied'))
+    ) {
+      setGraphLayer('current');
+    }
+  }, [graphLayer, review, verification]);
   const [tracePath, setTracePath] = useState<string[]>();
   const [symbolsFileId, setSymbolsFileId] = useState<string>();
   const [selectedSymbolId, setSelectedSymbolId] = useState<string>();
@@ -228,6 +241,13 @@ export function App() {
     };
   };
   const restore = (saved: NavigationLocation) => {
+    if (JSON.stringify(saved.view.workingSet) !== JSON.stringify(viewRef.current.workingSet)) {
+      setCodingPlan(undefined);
+      setReview(undefined);
+      setGraphPreview(undefined);
+      setGraphLayer('current');
+    }
+
     setOverviewOpen(false);
     if (!snapshot) {
       return;
@@ -300,6 +320,14 @@ export function App() {
   };
   useHostMessages((message: HostMessage) => {
     switch (message.type) {
+      case 'aiReferenceOpened':
+        if (
+          message.rootId === rootId.current &&
+          snapshot?.nodes.some((n) => n.id === message.nodeId)
+        ) {
+          selectFile(message.nodeId);
+        }
+        break;
       case 'fileStatus':
         if (message.rootId === rootId.current) {
           setFileStatus(message.files);
@@ -317,7 +345,10 @@ export function App() {
         }
         break;
       case 'aiProposalState':
-        if (message.rootId === rootId.current) {
+        if (
+          message.rootId === rootId.current &&
+          (!reviewConversation.current || message.regionKey === reviewConversation.current)
+        ) {
           setReview((old) => ({
             proposal: message.proposal,
             accepted:
@@ -649,6 +680,8 @@ export function App() {
                 : undefined
             }
             badges={[
+              ...(node.members.includes(activeFileId ?? '') ? ['Active editor'] : []),
+              ...(node.members.some((id) => effectiveSourceIds.includes(id)) ? ['AI source'] : []),
               ...(node.members.some((id) => failureScope.testScope.has(id))
                 ? ['Failed test scope']
                 : []),
@@ -671,8 +704,8 @@ export function App() {
                       : 'Plan read',
                   ]
                 : []),
-              ...(review && node.kind === 'file' && reviewFileState(review, node.id)
-                ? [reviewFileState(review, node.id)!]
+              ...(review && node.kind === 'file' && reviewFileState(review, node.id, verification)
+                ? [reviewFileState(review, node.id, verification)!]
                 : []),
             ]}
             onReview={
@@ -762,6 +795,8 @@ export function App() {
     failureScope,
     review,
     codingPlan,
+    activeFileId,
+    effectiveSourceIds,
   ]);
   const selectFile = (id: string) => {
     if (!snapshot) {
@@ -829,7 +864,7 @@ export function App() {
       nodes.map((node) => ({
         ...node,
         selected: node.id === (selectedSymbolId ?? groupSelection ?? view.selected),
-        className: `${node.className ?? ''} ${display.nodes.find((item) => item.id === node.id)?.members.some((id) => contextIds.includes(id)) ? 'context-region-node' : ''} ${display.nodes.find((item) => item.id === node.id)?.members.includes(activeFileId ?? '') ? 'active-editor-node' : ''} ${display.nodes.find((item) => item.id === node.id)?.members.some((id) => matchingIds.has(id)) ? 'search-match' : ''}`,
+        className: `${node.className ?? ''} ${display.nodes.find((item) => item.id === node.id)?.members.some((id) => effectiveSourceIds.includes(id)) ? 'context-region-node' : ''} ${display.nodes.find((item) => item.id === node.id)?.members.includes(activeFileId ?? '') ? 'active-editor-node' : ''} ${display.nodes.find((item) => item.id === node.id)?.members.some((id) => matchingIds.has(id)) ? 'search-match' : ''}`,
       })),
     [
       nodes,
@@ -840,6 +875,7 @@ export function App() {
       activeFileId,
       matchingIds,
       contextIds,
+      effectiveSourceIds,
     ],
   );
   const selected = overviewOpen ? groupSelection : (groupSelection ?? view.selected);
@@ -969,8 +1005,12 @@ export function App() {
       clearInspection();
       return;
     }
+    setReview(undefined);
+    setGraphPreview(undefined);
+    setGraphLayer('current');
     history.begin();
     clearInspection(false);
+    setCodingPlan(undefined);
     const set = createWorkingSet(ids);
     setTaskStage('explore');
     const anchor = snapshot?.nodes
@@ -1005,6 +1045,10 @@ export function App() {
     needsViewport.current = true;
   };
   const exitTask = () => {
+    setCodingPlan(undefined);
+    setReview(undefined);
+    setGraphPreview(undefined);
+    setGraphLayer('current');
     clearInspection();
     const saved = viewRef.current.layouts[`workspace:${layoutKey(viewRef.current)}`];
     applyView({
@@ -1249,7 +1293,12 @@ export function App() {
               Proposed
             </button>
             <button
-              disabled={review.state !== 'applied'}
+              disabled={
+                review.state !== 'applied' ||
+                verification?.proposalId !== review.proposal.id ||
+                verification.stale ||
+                verification.changedFiles.some((f) => f.sourceState && f.sourceState !== 'applied')
+              }
               aria-pressed={graphLayer === 'applied'}
               onClick={() => setGraphLayer('applied')}
             >
@@ -1441,9 +1490,22 @@ export function App() {
               </div>
             )}
           </main>
-          {contextOpen && snapshot ? (
+          {snapshot && (
             <ContextPanel
-              onNavigate={setTaskStage}
+              hidden={!contextOpen}
+              graphSelection={view.selected}
+              activeFileId={activeFileId}
+              onSourceScope={setEffectiveSourceIds}
+              onConversationChange={(key) => {
+                if (reviewConversation.current !== key) {
+                  reviewConversation.current = key;
+                  setCodingPlan(undefined);
+                  setReview(undefined);
+                  setGraphLayer('current');
+                  setGraphPreview(undefined);
+                }
+              }}
+              onNavigate={contextOpen ? setTaskStage : undefined}
               editableFileIds={task?.editable}
               onReview={setReview}
               key={snapshot.root.id}
@@ -1528,124 +1590,128 @@ export function App() {
               }
               onClose={() => setContextOpen(false)}
             />
-          ) : libraryOpen && snapshot ? (
-            <LibraryPanel
-              library={library}
-              snapshot={snapshot}
-              capture={capture}
-              restore={(location) => {
-                history.begin();
-                restore(location);
-              }}
-              onClose={() => setLibraryOpen(false)}
-            />
-          ) : overviewOpen && snapshot ? (
-            <ArchitecturePanel
-              snapshot={snapshot}
-              depth={overviewDepth}
-              onDepth={(depth) => {
-                setOverviewDepth(depth);
-                inspectionPositions.current = {};
-                arrangePeek.current = true;
-                needsViewport.current = true;
-              }}
-              onExplore={exploreModule}
-              onSelectFile={selectFile}
-              onClose={() => clearInspection()}
-            />
-          ) : impactTarget && snapshot ? (
-            <InvestigationPanel
-              snapshot={snapshot}
-              target={impactTarget}
-              onClose={() => setImpactTarget(undefined)}
-              onShowPath={showPath}
-              onSelectFile={selectFile}
-            />
-          ) : (
-            <DetailsPanel
-              contextAction={
-                file || group ? (
-                  <div className="assistant-file-actions">
-                    <button onClick={() => beginTask(file ? [file.id] : group!.members)}>
-                      Work on this
-                    </button>
-                    <button onClick={() => openAssistant('ask', file ? [file.id] : group!.members)}>
-                      ✦ Ask AI
-                    </button>
-                    <button
-                      onClick={() => openAssistant('propose', file ? [file.id] : group!.members)}
-                    >
-                      Edit with AI
-                    </button>
-                    <button
-                      className="quiet-button"
-                      onClick={() => addContext(file ? [file.id] : group!.members)}
-                    >
-                      Add to context
-                    </button>
-                  </div>
-                ) : undefined
-              }
-              annotationEditor={
-                snapshot && (file || group)
-                  ? (() => {
-                      const target = file
-                        ? { kind: 'file' as const, id: file.id }
-                        : { kind: 'folder' as const, id: group!.path };
-                      const annotation = library.annotations.find(
-                        (a) => targetKey(a.target) === targetKey(target),
-                      );
-                      return (
-                        <AnnotationEditor
-                          key={targetKey(target) + JSON.stringify(annotation)}
-                          rootId={snapshot.root.id}
-                          target={target}
-                          annotation={annotation}
-                        />
-                      );
-                    })()
-                  : undefined
-              }
-              snapshot={snapshot}
-              view={view}
-              file={file}
-              group={group}
-              contextFile={contextFile}
-              filesById={filesById}
-              inspectedEdge={inspectedEdge}
-              inspectedImports={inspectedImports}
-              outgoing={outgoing}
-              incoming={incoming}
-              symbolsShown={symbolsFileId === file?.id && !!file}
-              onToggleSymbols={() => {
-                history.begin();
-                if (symbolsFileId === file?.id) {
-                  clearInspection();
-                  return;
-                }
-                if (!file || !snapshot) {
-                  return;
-                }
-                setAiRegion(undefined);
-                setTracePath(undefined);
-                setSymbolsFileId(file.id);
-                setSelectedSymbolId(undefined);
-                inspectionPositions.current = {};
-                arrangePeek.current = true;
-                needsViewport.current = true;
-                readyToSaveViewport.current = false;
-              }}
-              onImpact={(target) => {
-                history.begin();
-                setImpactTarget(target);
-              }}
-              onBack={() => setEdgeSelection(undefined)}
-              onSelectFile={selectFile}
-              onPeek={togglePeek}
-              onExpand={expand}
-              onCollapse={collapse}
-            />
           )}
+          {!contextOpen &&
+            (libraryOpen && snapshot ? (
+              <LibraryPanel
+                library={library}
+                snapshot={snapshot}
+                capture={capture}
+                restore={(location) => {
+                  history.begin();
+                  restore(location);
+                }}
+                onClose={() => setLibraryOpen(false)}
+              />
+            ) : overviewOpen && snapshot ? (
+              <ArchitecturePanel
+                snapshot={snapshot}
+                depth={overviewDepth}
+                onDepth={(depth) => {
+                  setOverviewDepth(depth);
+                  inspectionPositions.current = {};
+                  arrangePeek.current = true;
+                  needsViewport.current = true;
+                }}
+                onExplore={exploreModule}
+                onSelectFile={selectFile}
+                onClose={() => clearInspection()}
+              />
+            ) : impactTarget && snapshot ? (
+              <InvestigationPanel
+                snapshot={snapshot}
+                target={impactTarget}
+                onClose={() => setImpactTarget(undefined)}
+                onShowPath={showPath}
+                onSelectFile={selectFile}
+              />
+            ) : (
+              <DetailsPanel
+                contextAction={
+                  file || group ? (
+                    <div className="assistant-file-actions">
+                      <button onClick={() => beginTask(file ? [file.id] : group!.members)}>
+                        Work on this
+                      </button>
+                      <button
+                        onClick={() => openAssistant('ask', file ? [file.id] : group!.members)}
+                      >
+                        ✦ Ask AI
+                      </button>
+                      <button
+                        onClick={() => openAssistant('propose', file ? [file.id] : group!.members)}
+                      >
+                        Edit with AI
+                      </button>
+                      <button
+                        className="quiet-button"
+                        onClick={() => addContext(file ? [file.id] : group!.members)}
+                      >
+                        Add to context
+                      </button>
+                    </div>
+                  ) : undefined
+                }
+                annotationEditor={
+                  snapshot && (file || group)
+                    ? (() => {
+                        const target = file
+                          ? { kind: 'file' as const, id: file.id }
+                          : { kind: 'folder' as const, id: group!.path };
+                        const annotation = library.annotations.find(
+                          (a) => targetKey(a.target) === targetKey(target),
+                        );
+                        return (
+                          <AnnotationEditor
+                            key={targetKey(target) + JSON.stringify(annotation)}
+                            rootId={snapshot.root.id}
+                            target={target}
+                            annotation={annotation}
+                          />
+                        );
+                      })()
+                    : undefined
+                }
+                snapshot={snapshot}
+                view={view}
+                file={file}
+                group={group}
+                contextFile={contextFile}
+                filesById={filesById}
+                inspectedEdge={inspectedEdge}
+                inspectedImports={inspectedImports}
+                outgoing={outgoing}
+                incoming={incoming}
+                symbolsShown={symbolsFileId === file?.id && !!file}
+                onToggleSymbols={() => {
+                  history.begin();
+                  if (symbolsFileId === file?.id) {
+                    clearInspection();
+                    return;
+                  }
+                  if (!file || !snapshot) {
+                    return;
+                  }
+                  setAiRegion(undefined);
+                  setTracePath(undefined);
+                  setSymbolsFileId(file.id);
+                  setSelectedSymbolId(undefined);
+                  inspectionPositions.current = {};
+                  arrangePeek.current = true;
+                  needsViewport.current = true;
+                  readyToSaveViewport.current = false;
+                }}
+                onImpact={(target) => {
+                  history.begin();
+                  setImpactTarget(target);
+                }}
+                onBack={() => setEdgeSelection(undefined)}
+                onSelectFile={selectFile}
+                onPeek={togglePeek}
+                onExpand={expand}
+                onCollapse={collapse}
+              />
+            ))}
         </div>
         <footer>
           <span className={`sync ${sync}`}>

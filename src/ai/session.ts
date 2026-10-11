@@ -356,6 +356,9 @@ export class AiSession implements vscode.Disposable {
       case 'aiRequest':
         await this.request(message);
         break;
+      case 'aiRecheckVerification':
+        await this.verification.recheck(message.reportId, this.options.afterApply);
+        break;
       case 'aiRunTest':
         await this.verification.test(message.reportId, message.save);
         break;
@@ -397,6 +400,12 @@ export class AiSession implements vscode.Disposable {
           viewColumn: vscode.ViewColumn.Beside,
           selection: new vscode.Range(pos, pos),
           preview: true,
+        });
+        this.options.post({
+          type: 'aiReferenceOpened',
+          rootId: refs!.bundle.rootId,
+          nodeId: ref.fileId,
+          requestId: message.requestId,
         });
         break;
       }
@@ -970,13 +979,9 @@ export class AiSession implements vscode.Disposable {
       const documents = await Promise.all(
         saved.bundle.files.map((f) => vscode.workspace.openTextDocument(vscode.Uri.parse(f.id))),
       );
+      const currentSources = new Map(documents.map((d) => [d.uri.toString(), d.getText()]));
       // No awaits between comparing current buffers and submitting the edit.
-      const changes = prepareEdits(
-        saved.value,
-        saved.bundle,
-        ids,
-        new Map(documents.map((d) => [d.uri.toString(), d.getText()])),
-      );
+      const changes = prepareEdits(saved.value, saved.bundle, ids, currentSources);
       this.assertEditable(changes.map((c) => c.fileId));
       if (
         this.disposed ||
@@ -987,6 +992,24 @@ export class AiSession implements vscode.Disposable {
       }
       const edit = new vscode.WorkspaceEdit();
       const diagnostics = this.verification.diagnostics(graph);
+      const hash = (text: string) => createHash('sha256').update(text).digest('hex');
+      const appliedSources = new Map(
+        [...new Set(changes.map((c) => c.fileId))].map((id) => {
+          const source = currentSources.get(id)!;
+          return [
+            id,
+            {
+              before: hash(source),
+              applied: hash(
+                editContent(
+                  source,
+                  changes.filter((c) => c.fileId === id),
+                ),
+              ),
+            },
+          ];
+        }),
+      );
       for (const change of changes) {
         const document = documents.find((d) => d.uri.toString() === change.fileId)!;
         edit.replace(
@@ -1013,6 +1036,7 @@ export class AiSession implements vscode.Disposable {
           proposalId,
           [...new Set(changes.map((c) => c.fileId))],
           this.options.afterApply,
+          appliedSources,
         );
       } catch (error) {
         this.options.log?.(`Post-Apply verification failed: ${String(error)}`);

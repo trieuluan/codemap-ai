@@ -5,11 +5,13 @@ export function ContextSuggestions({
   count,
   disabled,
   onAdd,
+  onReveal,
 }: {
   suggestions: ContextSuggestion[];
   count: number;
   disabled: boolean;
   onAdd: (ids: string[]) => void;
+  onReveal?: (id: string) => void;
 }) {
   const [selected, setSelected] = useState<string[]>([]);
   const key = suggestions.map((s) => s.fileId).join('\n');
@@ -23,7 +25,8 @@ export function ContextSuggestions({
       <span className="eyebrow">Suggested context · {suggestions.length}</span>
       <p className="helper-text">
         Local import/symbol metadata and filename matches. Review relevance before adding source.
-        Nothing is sent and edit permissions stay unchanged.
+        Nothing is sent. Task edit permissions stay unchanged; outside a task, all included source
+        can be edited.
       </p>
       {!!suggestions.length && (
         <p className="context-warning">
@@ -38,22 +41,33 @@ export function ContextSuggestions({
         </p>
       )}
       {suggestions.map((item) => (
-        <label className="context-suggestion" key={item.fileId}>
-          <input
-            type="checkbox"
-            checked={selected.includes(item.fileId)}
-            disabled={disabled || (!selected.includes(item.fileId) && selected.length >= room)}
-            onChange={(e) =>
-              setSelected((ids) =>
-                e.target.checked ? [...ids, item.fileId] : ids.filter((id) => id !== item.fileId),
-              )
-            }
-          />
-          <span>
-            <strong>{item.path}</strong>
-            <small>{item.reasons.join(' · ')}</small>
-          </span>
-        </label>
+        <div className="context-candidate" key={item.fileId}>
+          <label className="context-suggestion">
+            <input
+              type="checkbox"
+              checked={selected.includes(item.fileId)}
+              disabled={disabled || (!selected.includes(item.fileId) && selected.length >= room)}
+              onChange={(e) =>
+                setSelected((ids) =>
+                  e.target.checked ? [...ids, item.fileId] : ids.filter((id) => id !== item.fileId),
+                )
+              }
+            />
+            <span>
+              <strong>{item.path}</strong>
+              <small>{item.reasons.join(' · ')}</small>
+            </span>
+          </label>
+          {onReveal && (
+            <button
+              className="quiet-button"
+              onClick={() => onReveal(item.fileId)}
+              aria-label={`Show ${item.path} on graph`}
+            >
+              On map ↗
+            </button>
+          )}
+        </div>
       ))}
       {!!suggestions.length && (
         <button
@@ -63,7 +77,7 @@ export function ContextSuggestions({
             setSelected([]);
           }}
         >
-          Add {selected.length} reviewed files to source
+          Add {selected.length} reviewed {selected.length === 1 ? 'file' : 'files'} to source
         </button>
       )}
       {!room && (

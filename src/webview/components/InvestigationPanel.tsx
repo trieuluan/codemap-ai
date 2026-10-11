@@ -64,20 +64,38 @@ export function InvestigationPanel({
             workspace.
           </p>
         )}
-        {entries.map((entry) => (
-          <section className="connection-card impact-card" key={entry.nodeId}>
-            <button className="link" onClick={() => onSelectFile(entry.nodeId)}>
-              {filesById.get(entry.nodeId)?.path}
-            </button>
-            <span className="badge">
-              {entry.direct ? (target.symbolId ? 'binding' : 'direct') : 'indirect'}
-            </span>
-            <p className="path">
-              {entry.path.map((id) => filesById.get(id)?.path ?? id).join(' → ')}
-            </p>
-            <button onClick={() => onShowPath(entry.path)}>Show path on graph</button>
-          </section>
-        ))}
+        {[true, false].map((direct) => {
+          const items = entries.filter((entry) => entry.direct === direct);
+          if (!items.length) {
+            return null;
+          }
+          return (
+            <details key={String(direct)} open={direct} className="impact-section">
+              <summary>
+                {direct
+                  ? target.symbolId
+                    ? 'Known bindings'
+                    : 'Direct dependents'
+                  : 'Indirect impact'}{' '}
+                · {items.length}
+              </summary>
+              {items.map((entry) => (
+                <section className="connection-card impact-card" key={entry.nodeId}>
+                  <button className="link" onClick={() => onSelectFile(entry.nodeId)}>
+                    {filesById.get(entry.nodeId)?.path}
+                  </button>
+                  <span className="badge">
+                    {entry.direct ? (target.symbolId ? 'binding' : 'direct') : 'indirect'}
+                  </span>
+                  <p className="path">
+                    {entry.path.map((id) => filesById.get(id)?.path ?? id).join(' → ')}
+                  </p>
+                  <button onClick={() => onShowPath(entry.path)}>Show path on graph</button>
+                </section>
+              ))}
+            </details>
+          );
+        })}
       </div>
     </aside>
   );

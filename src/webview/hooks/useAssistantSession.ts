@@ -99,6 +99,7 @@ export function useAssistantSession({
         value.report.rootId === currentGraph.current.rootId
       ) {
         setVerification(value.report);
+        setVerificationError('');
         if (value.report.stale) {
           setIncludeVerification(false);
         }

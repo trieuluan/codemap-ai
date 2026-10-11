@@ -26,6 +26,12 @@ export function WorkingSetPanel({
   onAssistant: (mode: 'ask' | 'plan' | 'propose') => void;
   onOpen: (id: string) => void;
 }) {
+  const [scopeOpen, setScopeOpen] = useState(false);
+  useEffect(() => {
+    if (stage === 'review' || stage === 'verify') {
+      setScopeOpen(false);
+    }
+  }, [stage]);
   const [name, setName] = useState(set.name);
   useEffect(() => setName(set.name), [set.name]);
   const toggle = (key: 'context' | 'editable' | 'pinned', id: string) => {
@@ -65,7 +71,7 @@ export function WorkingSetPanel({
         </button>
         <button onClick={onExit}>Full graph</button>
       </div>
-      <details>
+      <details open={scopeOpen} onToggle={(event) => setScopeOpen(event.currentTarget.open)}>
         <summary>Scope & permissions · {set.pinned.length} pinned</summary>
         <p className="helper-text">
           Map visibility, AI source and edit permissions are separate. Adding a neighbor never

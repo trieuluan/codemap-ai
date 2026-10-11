@@ -1,3 +1,4 @@
+import { contextReviewKey } from '../../shared/context-review';
 import { suggestContext } from '../../shared/context-suggestions';
 import { ContextSuggestions } from './ContextSuggestions';
 import type { GraphSnapshot } from '../../shared/model';
@@ -37,7 +38,9 @@ export function AiAssistant({
   editableFileIds,
   onReview,
   onNavigate,
+  windowActions,
 }: {
+  windowActions?: React.ReactNode;
   graph: GraphSnapshot;
   sourceIds: string[];
   onAddSource: (ids: string[]) => void;
@@ -122,6 +125,12 @@ export function AiAssistant({
     intent,
     editableFileIds,
   });
+  useEffect(() => {
+    if (input.current && (tab === 'chat' || tab === 'plan')) {
+      input.current.style.height = '0px';
+      input.current.style.height = Math.min(120, input.current.scrollHeight) + 'px';
+    }
+  }, [question, tab]);
   const [roundId, setRoundId] = useState<string>();
   useEffect(() => setRoundId(undefined), [verification?.id]);
   const round = verificationHistory.find((r) => r.id === roundId) ?? verification;
@@ -153,12 +162,36 @@ export function AiAssistant({
     () => suggestContext(graph, sourceIds, question),
     [graph, sourceIds.join(), question],
   );
+  const reviewKey = contextReviewKey(
+    rootId,
+    revision,
+    sourceIds,
+    regionKey,
+    question,
+    editableFileIds,
+  );
+  const [reviewedScope, setReviewedScope] = useState<string>();
+  const [contextReview, setContextReview] = useState<{
+    key: string;
+    action: 'plan' | 'propose';
+    steps?: string[];
+  }>();
+  useEffect(() => setContextReview(undefined), [reviewKey]);
+  const submit = (action: 'ask' | 'propose' | 'plan', steps?: string[]) => {
+    if (action !== 'ask' && reviewedScope !== reviewKey) {
+      setContextReview({ key: reviewKey, action, steps });
+      setTab('context');
+      return;
+    }
+    void start(action, steps);
+  };
   return (
     <section className="ai-assistant assistant-workspace" aria-label="CodeMap AI">
       <div className="assistant-model-row">
-        {' '}
+        <strong className="assistant-title">Assistant</strong>
         <button
           className="ai-model-picker"
+          title={`Model · ${model?.vendor ?? 'VS Code'}`}
           disabled={busy || applying}
           onClick={() => send({ type: 'aiChooseModel' })}
         >
@@ -193,6 +226,7 @@ export function AiAssistant({
             )}
           </div>
         </details>
+        {windowActions}
       </div>
       {modelError && (
         <div role="alert" className="context-warning assistant-model-error">
@@ -279,18 +313,38 @@ export function AiAssistant({
         aria-labelledby={planDraft ? 'assistant-tab-plan' : 'assistant-tab-chat'}
         hidden={tab !== 'chat' && !planDraft}
       >
-        <button className="assistant-context-strip" onClick={() => setTab('context')}>
-          <span>
-            <small>SOURCE</small>
-            <strong title={contextSummary}>{contextSummary ?? `${fileCount} files`}</strong>
-          </span>
-          <span>Manage →</span>
-        </button>
-        {!!suggestions.length && (
-          <button className="suggested-context-link" onClick={() => setTab('context')}>
-            Review suggested context · {suggestions.length}
+        <div className="assistant-chat-context">
+          <button className="assistant-context-strip" onClick={() => setTab('context')}>
+            <span>
+              <small>SOURCE</small>
+              <strong title={contextSummary}>{contextSummary ?? `${fileCount} files`}</strong>
+            </span>
+            <span>Manage →</span>
           </button>
-        )}
+          {!!suggestions.length && (
+            <button className="suggested-context-link" onClick={() => setTab('context')}>
+              + {suggestions.length} suggested files
+            </button>
+          )}
+          {!planDraft && !!turns.length && (
+            <button
+              disabled={busy || applying}
+              className="quiet-button assistant-clear-chat"
+              title="Clear conversation"
+              aria-label="Clear conversation"
+              onClick={() => {
+                send({ type: 'aiClearHistory', rootId, regionKey: conversationKey });
+                setText('');
+                setProposal(undefined);
+                proposalId.current = undefined;
+                setUsage(undefined);
+                setCopied('');
+              }}
+            >
+              Clear
+            </button>
+          )}
+        </div>
         <div
           className="assistant-chat-scroll"
           ref={chatScroll}
@@ -344,23 +398,6 @@ export function AiAssistant({
 
           {!planDraft && !!turns.length && (
             <div className="ai-thread">
-              <div className="section-toolbar">
-                <span className="eyebrow">Conversation · {turns.length} turns</span>
-                <button
-                  disabled={busy || applying}
-                  className="quiet-button"
-                  onClick={() => {
-                    send({ type: 'aiClearHistory', rootId, regionKey: conversationKey });
-                    setText('');
-                    setProposal(undefined);
-                    proposalId.current = undefined;
-                    setUsage(undefined);
-                    setCopied('');
-                  }}
-                >
-                  Clear
-                </button>
-              </div>
               {turns.map((turn) => {
                 const stale = turn.revision !== revision || sync !== 'up-to-date';
                 const copy = (value: string) =>
@@ -457,28 +494,10 @@ export function AiAssistant({
               </div>
             )}
         </div>
-        <div className="assistant-source-meta">
-          <SourceSummary
-            fileCount={fileCount}
-            bundle={contextBundle}
-            regionKey={regionKey}
-            mode={mode === 'plan' ? 'propose' : mode}
-            ready={ready}
-            busy={busy || applying}
-            prepare={prepareContext}
-            onManage={() => setTab('context')}
-          />
-        </div>
         <div className="assistant-composer-dock">
           {error && !modelError && (
             <p role="alert" className="context-warning">
               {error}
-            </p>
-          )}
-          {!planDraft && !!turns.length && (
-            <p className="assistant-history-note">
-              Follow-ups use the current files/symbol region above. Earlier answers may refer to
-              older source.
             </p>
           )}
           <div className="ai-composer assistant-composer">
@@ -528,7 +547,7 @@ export function AiAssistant({
               }
               value={question}
               maxLength={8000}
-              rows={4}
+              rows={2}
               onChange={(e) => setQuestion(e.target.value)}
               disabled={busy || applying}
               onKeyDown={(e) => {
@@ -543,7 +562,7 @@ export function AiAssistant({
                   (model || configuredId)
                 ) {
                   e.preventDefault();
-                  void start(mode);
+                  submit(mode);
                 }
               }}
             />
@@ -563,7 +582,7 @@ export function AiAssistant({
                   className="primary"
                   disabled={!ready || !question.trim() || applying || !!submitBlocked}
                   onClick={() => {
-                    void start(mode);
+                    submit(mode);
                   }}
                 >
                   {mode === 'ask'
@@ -575,14 +594,9 @@ export function AiAssistant({
               )}
             </div>
           </div>
-          <p className={`ai-disclosure${submitBlocked ? ' submit-blocked' : ''}`}>
-            {submitBlocked ??
-              'Selected source is prepared automatically and sent only when you submit.'}
-          </p>
-          {usage && (
-            <p className="helper-text">
-              {usage.inputTokens.toLocaleString()} / {usage.maxInputTokens.toLocaleString()} input
-              tokens · {usage.historyTurns} prior turns included
+          {submitBlocked && (
+            <p className="ai-disclosure submit-blocked" role="status">
+              {submitBlocked}
             </p>
           )}
         </div>
@@ -615,7 +629,7 @@ export function AiAssistant({
             revision={revision}
             editable={editableFileIds}
             busy={busy || applying || !ready}
-            onGenerate={(ids) => void start('propose', ids)}
+            onGenerate={(ids) => submit('propose', ids)}
             onFocus={(ids) =>
               onAction({
                 id: `plan:${plan.id}`,
@@ -756,12 +770,82 @@ export function AiAssistant({
         aria-labelledby="assistant-tab-context"
         hidden={tab !== 'context'}
       >
+        {contextReview && contextReview.key === reviewKey && (
+          <section className="context-review-gate" role="status">
+            <strong>
+              Review context before {contextReview.action === 'plan' ? 'planning' : 'editing'}
+            </strong>
+            <p className="helper-text">
+              Check implementations, dependencies and tests below. No request has been sent.
+            </p>
+            <p className="helper-text">
+              {editableFileIds
+                ? `${editableFileIds.filter((id) => sourceIds.includes(id)).length} included file(s) allowed for edits. Adding source keeps task edit permissions unchanged.`
+                : 'All included source files can be edited. Use Work on this to restrict edit permissions.'}
+            </p>
+            <div className="ai-connection-actions">
+              <button
+                disabled={busy || applying || sync !== 'up-to-date'}
+                onClick={() => {
+                  setReviewedScope(reviewKey);
+                  setContextReview(undefined);
+                  void start(contextReview.action, contextReview.steps);
+                }}
+              >
+                Continue with current source
+              </button>
+              <button
+                onClick={() => {
+                  setContextReview(undefined);
+                  setTab(mode === 'plan' ? 'plan' : 'chat');
+                }}
+              >
+                Back to question
+              </button>
+            </div>
+          </section>
+        )}
         <ContextSuggestions
           suggestions={suggestions}
           count={fileCount}
           disabled={busy || applying}
-          onAdd={onAddSource}
+          onAdd={(ids) => {
+            onAddSource(ids);
+            setContextReview(undefined);
+          }}
+          onReveal={(id) =>
+            onAction({
+              id: `context:${id}`,
+              kind: 'focus',
+              fileIds: [id],
+              paths: [],
+              reason: 'Inspect context candidate',
+            })
+          }
         />
+        <div className="assistant-source-meta">
+          <SourceSummary
+            fileCount={fileCount}
+            bundle={contextBundle}
+            regionKey={regionKey}
+            mode={mode === 'plan' ? 'propose' : mode}
+            ready={ready}
+            busy={busy || applying}
+            prepare={prepareContext}
+            onManage={() => setTab('context')}
+          />
+        </div>
+        <p className="helper-text">
+          Selected source is prepared automatically and sent only when you submit. Follow-ups use
+          the current source; earlier answers may describe older revisions. After adding source,
+          return to Plan/Edit and submit again; plans for a previous scope must be recreated.
+        </p>
+        {usage && (
+          <p className="helper-text">
+            {usage.inputTokens.toLocaleString()} / {usage.maxInputTokens.toLocaleString()} input
+            tokens · {usage.historyTurns} prior turns included
+          </p>
+        )}
         {contextContent}
         {includeVerification && verification && (
           <div className="repair-context">

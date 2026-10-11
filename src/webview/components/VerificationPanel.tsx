@@ -21,6 +21,7 @@ export function VerificationPanel({
   historical?: boolean;
 }) {
   const running = report.test?.state === 'running';
+  const refreshing = !!report.refreshing;
   const focus = (ids: string[]) =>
     onAction({
       id: `verification:${report.id}`,
@@ -34,7 +35,7 @@ export function VerificationPanel({
       <div className="section-toolbar">
         <strong>After Apply</strong>
         <span className={`ai-connection ${report.stale ? '' : 'connected'}`}>
-          {report.stale ? 'Out of date' : 'Observed'}
+          {refreshing ? 'Refreshing…' : report.stale ? 'Out of date' : 'Observed'}
         </span>
       </div>
       <small>
@@ -65,6 +66,37 @@ export function VerificationPanel({
         >
           Show impact
         </button>
+      </div>
+      {!historical && (
+        <button
+          disabled={running || refreshing}
+          onClick={() => send({ type: 'aiRecheckVerification', reportId: report.id })}
+        >
+          {refreshing ? 'Refreshing observations…' : 'Refresh observations'}
+        </button>
+      )}
+      <div className="verification-files" aria-label="Applied source status">
+        {report.changedFiles.map((file) => (
+          <div className="verification-file" key={file.id}>
+            <button
+              className="quiet-button"
+              onClick={() => send({ type: 'openFile', nodeId: file.id })}
+            >
+              {file.path} ↗
+            </button>
+            <small>
+              {file.sourceState === 'applied'
+                ? 'AI edits present'
+                : file.sourceState === 'reverted'
+                  ? 'Undone'
+                  : file.sourceState === 'modified'
+                    ? 'Edited after Apply'
+                    : file.sourceState === 'unavailable'
+                      ? 'Source unavailable'
+                      : 'Not compared'}
+            </small>
+          </div>
+        ))}
       </div>
       <details open={report.diagnostics.some((d) => d.severity === 'error')}>
         <summary>
@@ -125,10 +157,16 @@ export function VerificationPanel({
             <button onClick={() => send({ type: 'aiStopTest' })}>Stop test</button>
           ) : (
             <>
-              <button onClick={() => send({ type: 'aiRunTest', reportId: report.id, save: false })}>
+              <button
+                disabled={report.stale || refreshing}
+                onClick={() => send({ type: 'aiRunTest', reportId: report.id, save: false })}
+              >
                 Choose test · disk only
               </button>
-              <button onClick={() => send({ type: 'aiRunTest', reportId: report.id, save: true })}>
+              <button
+                disabled={report.stale || refreshing}
+                onClick={() => send({ type: 'aiRunTest', reportId: report.id, save: true })}
+              >
                 Save changed files & choose test
               </button>
             </>
@@ -143,9 +181,12 @@ export function VerificationPanel({
           <details open={running || report.test.state === 'failed'}>
             <summary>
               {report.test.name} · {report.test.state}
+              {report.test.stale ? ' · Previous source' : ''}
               {report.test.exitCode !== undefined ? ` (exit ${report.test.exitCode})` : ''}
             </summary>
             <p className="helper-text">
+              {report.test.stale &&
+                'Source was refreshed or changed. Run the test again for current evidence. '}
               {report.test.saved
                 ? 'Changed files saved before test. Other buffers may remain unsaved.'
                 : 'Disk only: unsaved AI edits may not be tested.'}
@@ -160,8 +201,8 @@ export function VerificationPanel({
       <label className="ai-verification-share">
         <input
           type="checkbox"
-          checked={include && !report.stale && !running}
-          disabled={report.stale || running || historical}
+          checked={include && !report.stale && !running && !refreshing}
+          disabled={report.stale || running || refreshing || historical}
           onChange={(event) => onInclude(event.target.checked)}
         />
         Include this report and test output in the next AI request
@@ -172,8 +213,9 @@ export function VerificationPanel({
             report.stale ||
             historical ||
             running ||
+            refreshing ||
             (!report.diagnostics.some((d) => d.severity === 'error') &&
-              report.test?.state !== 'failed')
+              (report.test?.state !== 'failed' || report.test.stale))
           }
           onClick={onRepair}
         >

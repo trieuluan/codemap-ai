@@ -1,4 +1,5 @@
 import type { AiProposal } from './ai';
+import type { VerificationReport } from './verification';
 import type { GraphSnapshot } from './model';
 export interface ReviewState {
   proposal: AiProposal;
@@ -7,13 +8,35 @@ export interface ReviewState {
   state: string;
   applied: string[];
 }
-export function reviewFileState(review: ReviewState, fileId: string) {
+export function reviewFileState(
+  review: ReviewState,
+  fileId: string,
+  observation?: VerificationReport,
+) {
   const edits = review.proposal.changes.filter((c) => c.fileId === fileId);
   if (!edits.length) {
     return undefined;
   }
   if (review.state === 'applied') {
-    return edits.some((c) => review.applied.includes(c.id)) ? 'Applied' : 'Rejected';
+    if (!edits.some((c) => review.applied.includes(c.id))) {
+      return 'Rejected';
+    }
+    const sourceState =
+      observation?.proposalId === review.proposal.id
+        ? observation.changedFiles?.find((f) => f.id === fileId)?.sourceState
+        : undefined;
+    if (sourceState === 'reverted') {
+      return 'Undone';
+    }
+    if (sourceState === 'modified') {
+      return 'Modified after Apply';
+    }
+    if (sourceState === 'unavailable') {
+      return 'Source unavailable';
+    }
+    return observation?.proposalId === review.proposal.id && !observation.stale
+      ? 'Applied'
+      : 'Applied earlier';
   }
   if (review.state !== 'ready') {
     return 'Expired';

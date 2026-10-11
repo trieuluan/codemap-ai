@@ -121,17 +121,19 @@ export function LibraryPanel({
                   state.hideIsolated && 'Hide isolated',
                   state.focus && `${state.focus}-hop focus`,
                 ].filter(Boolean);
-                const context = v.location.overviewDepth
-                  ? `Architecture · depth ${v.location.overviewDepth}`
-                  : v.location.path
-                    ? 'Import path'
-                    : v.location.symbolsFileId
-                      ? 'Symbol canvas'
-                      : v.location.impact
-                        ? 'Impact analysis'
-                        : state.mode === 'folders'
-                          ? `Folders · depth ${state.depth}`
-                          : 'Files';
+                const context = state.workingSet
+                  ? 'Working Set'
+                  : v.location.overviewDepth
+                    ? `Architecture · depth ${v.location.overviewDepth}`
+                    : v.location.path
+                      ? 'Import path'
+                      : v.location.symbolsFileId
+                        ? 'Symbol canvas'
+                        : v.location.impact
+                          ? 'Impact analysis'
+                          : state.mode === 'folders'
+                            ? `Folders · depth ${state.depth}`
+                            : 'Files';
                 return (
                   <article className="view-card" key={v.id}>
                     {renaming === v.id ? (
@@ -193,7 +195,13 @@ export function LibraryPanel({
                         </div>
                         <div className="view-card-meta">
                           <span>{context}</span>
-                          <span>{filters.length ? `${filters.length} filters` : 'All files'}</span>
+                          <span>
+                            {state.workingSet
+                              ? `${state.workingSet.files.length} on map · ${state.workingSet.context.length} source · ${state.workingSet.editable.length} editable`
+                              : filters.length
+                                ? `${filters.length} filters`
+                                : 'All files'}
+                          </span>
                         </div>
                         <button
                           className="view-open"

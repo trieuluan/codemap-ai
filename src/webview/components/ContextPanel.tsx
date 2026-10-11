@@ -1,15 +1,19 @@
 import { actionCatalog, type AiGraphAction } from '../../shared/ai-actions';
 import { useContextPreview } from '../hooks/useContextPreview';
 import { AiAssistant } from './AiAssistant';
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type { GraphSnapshot, SyncState } from '../../shared/model';
 import { contextCandidates, contextLimits } from '../../shared/context';
-import { PanelHeading, PanelSection } from './InspectorParts';
+import { PanelSection } from './InspectorParts';
 import { send } from '../bridge';
 import type { ReviewState } from '../../shared/review-graph';
 
 export function ContextPanel({
   snapshot,
+  hidden = false,
+  graphSelection,
+  activeFileId,
+  onSourceScope,
   selected,
   onToggle,
   onClear,
@@ -22,7 +26,12 @@ export function ContextPanel({
   editableFileIds,
   onReview,
   onNavigate,
+  onConversationChange,
 }: {
+  hidden?: boolean;
+  graphSelection?: string;
+  activeFileId?: string;
+  onSourceScope?: (ids: string[]) => void;
   intent?: {
     mode: 'ask' | 'propose' | 'plan';
     id: string;
@@ -30,6 +39,7 @@ export function ContextPanel({
   };
   editableFileIds?: string[];
   onReview?: (state: ReviewState) => void;
+  onConversationChange: (key: string) => void;
   onNavigate?: (stage: 'explore' | 'plan' | 'review' | 'verify') => void;
   snapshot: GraphSnapshot;
   selected: string[];
@@ -41,7 +51,8 @@ export function ContextPanel({
   onAdd: (ids: string[]) => void;
   onGraphAction: (action: AiGraphAction) => void;
 }) {
-  const [width, setWidth] = useState(420);
+  const [width, setWidth] = useState(480);
+  const [expanded, setExpanded] = useState(false);
   const resize = useRef<{ x: number; width: number } | undefined>(undefined);
   const [added, setAdded] = useState<string[]>([]);
   const [focused, setFocused] = useState(true);
@@ -55,6 +66,14 @@ export function ContextPanel({
     [snapshot, selected, dependencies, dependents],
   );
   const fileIds = candidates.filter((file) => !excluded.includes(file.id)).map((file) => file.id);
+  const scopeHandler = useRef(onSourceScope);
+  scopeHandler.current = onSourceScope;
+  useEffect(() => scopeHandler.current?.(fileIds), [fileIds.join('\n')]);
+  useEffect(() => {
+    if (hidden) {
+      setExpanded(false);
+    }
+  }, [hidden]);
   const symbolOptions = snapshot.nodes
     .filter((n) => fileIds.includes(n.id))
     .flatMap((n) =>
@@ -76,6 +95,11 @@ export function ContextPanel({
       mode: focused ? 'focused' : 'full',
       symbol: focus ? { nodeId: focus.nodeId, symbolId: focus.symbolId } : undefined,
     });
+  const conversationHandler = useRef(onConversationChange);
+  conversationHandler.current = onConversationChange;
+  useEffect(() => {
+    conversationHandler.current(conversationKey);
+  }, [conversationKey]);
   const graphIndex = useMemo(
     () => (bundle ? actionCatalog(snapshot, bundle) : undefined),
     [snapshot, bundle],
@@ -95,6 +119,27 @@ export function ContextPanel({
         </p>
       </div>
 
+      <div className="ai-connection-actions">
+        {[
+          ['Graph selection', graphSelection],
+          ['Active editor', activeFileId],
+        ].map(([label, id]) => {
+          const file = snapshot.nodes.find((n) => n.id === id);
+          return file ? (
+            <button
+              key={label}
+              disabled={fileIds.includes(file.id)}
+              title={file.path}
+              onClick={() => {
+                onAdd([file.id]);
+                setExcluded((ids) => ids.filter((id) => id !== file.id));
+              }}
+            >
+              Add {label?.toLowerCase()} · {file.name}
+            </button>
+          ) : null;
+        })}
+      </div>
       <p className="helper-text">
         Shift-click files or folders on the canvas to add/remove a region. Search here to add hidden
         files.
@@ -365,9 +410,20 @@ export function ContextPanel({
     </div>
   );
   return (
-    <aside className="inspector assistant-panel" aria-label="CodeMap Assistant" style={{ width }}>
+    <aside
+      className={`inspector assistant-panel${expanded ? ' is-expanded' : ''}`}
+      aria-label="CodeMap Assistant"
+      hidden={hidden}
+      style={{ width, display: hidden ? 'none' : undefined }}
+      onKeyDown={(event) => {
+        if (event.key === 'Escape' && expanded && !event.defaultPrevented) {
+          setExpanded(false);
+        }
+      }}
+    >
       <div
         className="assistant-resize"
+        hidden={expanded}
         role="separator"
         aria-label="Resize assistant"
         aria-orientation="vertical"
@@ -416,16 +472,23 @@ export function ContextPanel({
           }
         }}
       />
-      <PanelHeading
-        eyebrow="CodeMap"
-        title="Assistant"
-        action={
-          <button className="icon-button" aria-label="Close assistant" onClick={onClose}>
-            ×
-          </button>
-        }
-      />
       <AiAssistant
+        windowActions={
+          <div className="assistant-window-actions">
+            <button
+              className="icon-button"
+              aria-label={expanded ? 'Restore assistant size' : 'Expand assistant'}
+              title={expanded ? 'Restore sidebar · Esc' : 'Expand assistant'}
+              aria-pressed={expanded}
+              onClick={() => setExpanded((value) => !value)}
+            >
+              {expanded ? '↙' : '↗'}
+            </button>
+            <button className="icon-button" aria-label="Close assistant" onClick={onClose}>
+              ×
+            </button>
+          </div>
+        }
         onNavigate={onNavigate}
         graph={snapshot}
         sourceIds={fileIds}

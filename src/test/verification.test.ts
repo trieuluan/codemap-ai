@@ -1,6 +1,8 @@
+import { createHash } from 'node:crypto';
+import { scanWorkspace } from '../workspace';
 import * as assert from 'node:assert/strict';
 import * as vscode from 'vscode';
-import { mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, writeFile, rm, mkdir, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { AiSession } from '../ai/session';
@@ -117,20 +119,27 @@ suite('Range review and post-Apply verification', () => {
         changeId: proposal.changes[0].id,
       });
       assert.equal(conflicted.getText(), original.replace('a = 1', 'a = 9'));
-      await setText(original);
+      const beforeApply = '// Unrelated edit preserved when ranges are rebased.\n' + original;
+      await setText(beforeApply);
       await session.apply(proposal.id, [proposal.changes[0].id]);
       const document = await vscode.workspace.openTextDocument(uri);
-      assert.equal(document.getText(), 'export const a = 11;\nexport const b = 2;\n');
+      assert.equal(document.getText(), beforeApply.replace('a = 1', 'a = 11'));
       assert.ok(document.isDirty);
       assert.equal(events.filter((e) => e.type === 'aiApplied' && !e.error).length, 1);
       const observed = events.find((e) => e.type === 'aiVerification');
       assert.ok(observed?.type === 'aiVerification');
       assert.ok(observed.report.stale);
+      assert.equal(observed.report.changedFiles[0].sourceState, 'applied');
       assert.match(observed.report.graphError!, /Synthetic graph failure/);
       const last = events.at(-1);
       assert.notEqual(last?.type, 'aiApplied');
       session.status();
       assert.ok(events.some((e) => e.type === 'aiProposalState' && e.state === 'applied'));
+      await setText(beforeApply);
+      await session.handle({ type: 'aiRecheckVerification', reportId: observed.report.id });
+      const undone = [...events].reverse().find((e) => e.type === 'aiVerification');
+      assert.ok(undone?.type === 'aiVerification');
+      assert.equal(undone.report.changedFiles[0].sourceState, 'reverted');
       // Restore explicitly: global Undo is focus-dependent in the desktop test host.
       const restore = new vscode.WorkspaceEdit();
       restore.replace(
@@ -353,4 +362,305 @@ suite('Range review and post-Apply verification', () => {
       await rm(directory, { recursive: true, force: true });
     }
   });
+  test('package discovery and execution use package cwd; escaping symlinks are rejected', async () => {
+    const root = vscode.Uri.joinPath(
+      vscode.workspace.workspaceFolders![0].uri,
+      'package-test-fixture',
+    );
+    const outside = await mkdtemp(join(tmpdir(), 'codemap-outside-test-'));
+    const runner = new TestRunner();
+    const results: TestResult[] = [];
+    try {
+      await mkdir(join(root.fsPath, 'packages/core'), { recursive: true });
+      await writeFile(
+        join(root.fsPath, 'package.json'),
+        JSON.stringify({ scripts: { test: 'node -e "process.exit(9)"' } }),
+      );
+      await writeFile(
+        join(root.fsPath, 'packages/core/package.json'),
+        JSON.stringify({ scripts: { test: 'node -e "console.log(process.cwd())"' } }),
+      );
+      const choices = await runner.choices(root, ['packages/core/src/a.ts']);
+      assert.equal(choices[0].directory, 'packages/core');
+      assert.equal(choices[0].related, true);
+      assert.ok(choices.some((c) => c.directory === ''));
+      await runner.run(root, choices[0], false, (r) => results.push(r));
+      assert.equal(results.at(-1)?.state, 'passed');
+      assert.match(results.at(-1)!.output, /packages\/core/);
+      assert.match(results.at(-1)!.name, /packages\/core/);
+      await assert.rejects(
+        runner.run(root, { manager: 'npm', name: 'test', directory: '../' }, false, () => {}),
+        /Invalid package/,
+      );
+      await assert.rejects(
+        runner.run(
+          root,
+          choices[0],
+          false,
+          () => {},
+          () => false,
+        ),
+        /source changed/,
+      );
+      const pending = runner.run(root, choices[0], false, () => {});
+      await assert.rejects(
+        runner.run(root, choices[0], false, () => {}),
+        /already active/,
+      );
+      runner.stop();
+      await assert.rejects(pending, /cancelled/);
+      await symlink(outside, join(root.fsPath, 'escape'));
+      await assert.rejects(
+        runner.run(root, { manager: 'npm', name: 'test', directory: 'escape' }, false, () => {}),
+        /outside the workspace/,
+      );
+      await assert.rejects(
+        runner.run(
+          root,
+          { manager: 'npm', name: 'test:removed', directory: 'packages/core' },
+          false,
+          () => {},
+        ),
+        /no longer exists/,
+      );
+    } finally {
+      runner.dispose();
+      await rm(root.fsPath, { recursive: true, force: true });
+      await rm(outside, { recursive: true, force: true });
+    }
+  });
+  test('stale reports and source changes during test selection cannot execute tasks', async () => {
+    const root = vscode.workspace.workspaceFolders![0].uri;
+    const graph: GraphSnapshot = {
+      root: { id: root.toString(), name: 'test' },
+      revision: 1,
+      scannedAt: '',
+      warnings: [],
+      nodes: [],
+      edges: [],
+    };
+    const events: AiHostMessage[] = [];
+    const runner = new TestRunner();
+    let chosen = 0,
+      runs = 0;
+    const service = new Verification(
+      () => graph,
+      (m) => events.push(m),
+      runner,
+    );
+    runner.choose = async () => {
+      chosen++;
+      service.changed();
+      return { manager: 'npm', name: 'test' };
+    };
+    runner.run = async () => {
+      runs++;
+    };
+    try {
+      await service.observe(graph, [], 'p', [], async () => {});
+      const message = events.find((e) => e.type === 'aiVerification');
+      assert.ok(message?.type === 'aiVerification');
+      await service.test(message.report.id, true);
+      assert.equal(chosen, 1);
+      assert.equal(runs, 0);
+      await service.test(message.report.id, false);
+      assert.equal(chosen, 1);
+      assert.equal(runs, 0);
+      assert.ok(
+        events.some((e) => e.type === 'aiVerificationError' && /stale|changed/.test(e.message)),
+      );
+    } finally {
+      service.dispose();
+    }
+  });
+  test('refresh observations tracks manual edits and Undo without treating old tests as current', async () => {
+    const root = vscode.workspace.workspaceFolders![0].uri;
+    const uri = vscode.Uri.joinPath(root, 'source-observation.ts');
+    const before = 'export const value = 1;\n';
+    const applied = 'export const value = 2;\n';
+    await vscode.workspace.fs.writeFile(uri, Buffer.from(applied));
+    const document = await vscode.workspace.openTextDocument(uri);
+    let graph: GraphSnapshot = {
+      root: { id: root.toString(), name: 'test' },
+      revision: 1,
+      scannedAt: '',
+      warnings: [],
+      edges: [],
+      nodes: [
+        {
+          id: uri.toString(),
+          path: 'source-observation.ts',
+          name: 'source-observation.ts',
+          language: 'typescript',
+          outside: [],
+        },
+      ],
+    };
+    const events: AiHostMessage[] = [];
+    const runner = new TestRunner();
+    runner.choose = async () => ({ manager: 'npm', name: 'test' });
+    runner.run = async (_root, _choice, saved, publish) => {
+      publish({
+        name: 'test',
+        state: 'failed',
+        exitCode: 1,
+        output: 'fixture failure',
+        truncated: false,
+        startedAt: '',
+        saved,
+      });
+    };
+    const service = new Verification(
+      () => graph,
+      (m) => events.push(m),
+      runner,
+    );
+    const latest = () => {
+      const event = [...events].reverse().find((e) => e.type === 'aiVerification');
+      assert.ok(event?.type === 'aiVerification');
+      return event.report;
+    };
+    const refresh = async () => {
+      graph = { ...graph, revision: graph.revision + 1 };
+    };
+    const replace = async (text: string) => {
+      const edit = new vscode.WorkspaceEdit();
+      edit.replace(
+        uri,
+        new vscode.Range(document.positionAt(0), document.positionAt(document.getText().length)),
+        text,
+      );
+      assert.ok(await vscode.workspace.applyEdit(edit));
+    };
+    try {
+      const digest = (text: string) => createHash('sha256').update(text).digest('hex');
+      await service.observe(
+        graph,
+        [],
+        'p',
+        [uri.toString()],
+        refresh,
+        new Map([[uri.toString(), { before: digest(before), applied: digest(applied) }]]),
+      );
+      assert.equal(latest().changedFiles[0].sourceState, 'applied');
+      const id = latest().id;
+      await service.test(id, false);
+      assert.equal(latest().test?.stale, undefined);
+      await replace(applied + '// manual change\n');
+      assert.equal(latest().changedFiles[0].sourceState, 'modified');
+      assert.ok(latest().stale);
+      assert.ok(latest().test?.stale);
+      await service.recheck(id, refresh);
+      assert.equal(latest().stale, false);
+      assert.equal(latest().changedFiles[0].sourceState, 'modified');
+      assert.ok(latest().test?.stale);
+      await replace(before);
+      assert.equal(latest().changedFiles[0].sourceState, 'reverted');
+      await service.recheck(id, refresh);
+      assert.equal(latest().stale, false);
+      assert.equal(latest().changedFiles[0].sourceState, 'reverted');
+      await service.test(id, false);
+      assert.equal(latest().test?.stale, undefined);
+      await service.recheck(id, async () => {
+        throw new Error('Synthetic refresh failure');
+      });
+      assert.ok(latest().stale);
+      assert.equal(latest().refreshing, false);
+      assert.ok(
+        events.some(
+          (e) => e.type === 'aiVerificationError' && /Synthetic refresh failure/.test(e.message),
+        ),
+      );
+      await service.recheck(id, refresh);
+      let release!: () => void;
+      let refreshCount = 0;
+      const pending = service.recheck(id, async () => {
+        refreshCount++;
+        await new Promise<void>((resolve) => {
+          release = resolve;
+        });
+      });
+      await service.recheck(id, refresh);
+      assert.equal(refreshCount, 1);
+      assert.throws(() => service.context(id, root.toString()), /running/);
+      service.reset();
+      const count = events.length;
+      release();
+      await pending;
+      assert.equal(
+        events.length,
+        count,
+        'disposed/reset recheck must not publish stale observations',
+      );
+    } finally {
+      service.dispose();
+      await document.save();
+      await vscode.commands.executeCommand('workbench.action.closeAllEditors');
+      await vscode.workspace.fs.delete(uri);
+    }
+  });
+  if (process.env.CODEMAP_QA_ROOT) {
+    test('real codemap scan preserves known imports and declaration routes without changing source', async function () {
+      this.timeout(120000);
+      const root = vscode.Uri.file(process.env.CODEMAP_QA_ROOT!);
+      const token = new vscode.CancellationTokenSource();
+      const target = vscode.Uri.joinPath(root, 'packages/runtime-node/src/harness/plan-actions.ts');
+      const original = await vscode.workspace.fs.readFile(target);
+      try {
+        const started = performance.now();
+        const graph = await scanWorkspace(
+          { uri: root, name: 'codemap', index: 0 },
+          token.token,
+          () => {},
+        );
+        assert.ok(graph.nodes.length > 200);
+        const node = graph.nodes.find((n) => n.id === target.toString());
+        assert.ok(node);
+        const dependencies = graph.edges.filter((e) => e.source === node.id);
+        assert.ok(dependencies.length);
+        assert.ok(
+          dependencies.some(
+            (e) =>
+              graph.nodes.find((n) => n.id === e.target)?.path ===
+              'packages/runtime-node/src/runtime-input.ts',
+          ),
+        );
+        assert.ok(
+          dependencies.some((edge) =>
+            edge.sites.some((site) =>
+              site.symbols?.some(
+                (symbol) =>
+                  symbol.local === 'PlanReviewAction' &&
+                  symbol.typeOnly &&
+                  symbol.declaration?.nodeId === edge.target,
+              ),
+            ),
+          ),
+        );
+        assert.ok(
+          dependencies.every((e) => e.sites.length && e.sites.every((site) => site.line >= 0)),
+        );
+        assert.deepEqual(await vscode.workspace.fs.readFile(target), original);
+        console.log(
+          `Real codemap scan: ${graph.nodes.length} files, ${graph.edges.length} edges, ${graph.warnings.length} warnings, ${Math.round(performance.now() - started)} ms`,
+        );
+      } finally {
+        token.dispose();
+      }
+    });
+    test('read-only discovery on the real codemap monorepo recommends runtime-node tests', async () => {
+      const runner = new TestRunner();
+      try {
+        const choices = await runner.choices(vscode.Uri.file(process.env.CODEMAP_QA_ROOT!), [
+          'packages/runtime-node/src/harness/plan-actions.ts',
+        ]);
+        assert.ok(choices.length > 2);
+        assert.equal(choices[0].directory, 'packages/runtime-node');
+        assert.ok(choices.some((c) => c.directory === '' && c.name === 'test'));
+        console.log('Real repo test choices:', choices.map((c) => c.label).join(', '));
+      } finally {
+        runner.dispose();
+      }
+    });
+  }
 });

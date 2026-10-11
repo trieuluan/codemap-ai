@@ -1,4 +1,11 @@
 import * as vscode from 'vscode';
+import { realpath } from 'node:fs/promises';
+import { isAbsolute, relative } from 'node:path';
+import {
+  packageTestScripts,
+  type TestScriptChoice,
+  type PackageTests,
+} from '../shared/test-scripts';
 import { spawn, type ChildProcess } from 'node:child_process';
 import type { TestResult } from '../shared/verification';
 
@@ -6,24 +13,50 @@ import type { TestResult } from '../shared/verification';
 export class TestRunner implements vscode.Disposable {
   private cancel?: () => void;
   private disposed = false;
+  private preparing = false;
+  private generation = 0;
   private choosing?: vscode.CancellationTokenSource;
-  async choose(root: vscode.Uri) {
+  async choices(root: vscode.Uri, changedPaths: string[] = []) {
+    const files = await vscode.workspace.findFiles(
+      new vscode.RelativePattern(root, '**/package.json'),
+      '**/{node_modules,.git,dist,build,out,coverage,.next,.vscode-test}/**',
+    );
+    const packages: PackageTests[] = [];
+    for (const uri of files) {
+      const directory = relative(root.fsPath, uri.fsPath)
+        .split('\\')
+        .join('/')
+        .replace(/(^|\/)package\.json$/, '');
+      try {
+        const manifest = JSON.parse(
+          Buffer.from(await vscode.workspace.fs.readFile(uri)).toString('utf8'),
+        );
+        packages.push({ directory, manifest });
+      } catch {
+        /* Invalid manifests cannot offer executable scripts. */
+      }
+    }
+    return packageTestScripts(packages, changedPaths);
+  }
+  async choose(
+    root: vscode.Uri,
+    changedPaths: string[] = [],
+  ): Promise<TestScriptChoice | undefined> {
     if (!vscode.workspace.isTrusted || root.scheme !== 'file') {
       throw new Error('Trust a filesystem workspace before running tests.');
     }
-    const text = await vscode.workspace.fs.readFile(vscode.Uri.joinPath(root, 'package.json'));
-    const pkg = JSON.parse(Buffer.from(text).toString('utf8'));
-    const scripts = Object.entries(pkg.scripts ?? {}).filter(
-      ([name, value]) => /^test(?::|$)/.test(name) && typeof value === 'string',
-    );
+    const scripts = await this.choices(root, changedPaths);
     if (!scripts.length) {
-      throw new Error('No test or test:* scripts in the root package.json.');
+      throw new Error('No test or test:* scripts found in workspace packages.');
     }
     this.choosing?.cancel();
     const cancellation = new vscode.CancellationTokenSource();
     this.choosing = cancellation;
     const selected = await vscode.window.showQuickPick(
-      scripts.map(([name, command]) => ({ label: name, description: String(command), name })),
+      scripts.map((script) => ({
+        ...script,
+        detail: `${script.related ? 'Changed files in this package · ' : ''}${script.detail}`,
+      })),
       {
         title: 'CodeMap · Choose test script',
         placeHolder: 'Runs project code on disk; review the script before choosing',
@@ -37,20 +70,16 @@ export class TestRunner implements vscode.Disposable {
     if (!selected || this.disposed) {
       return;
     }
-    const manager =
-      typeof pkg.packageManager === 'string' ? pkg.packageManager.split('@')[0] : 'npm';
-    if (!['npm', 'pnpm', 'yarn', 'bun'].includes(manager)) {
-      throw new Error('Unsupported package manager.');
-    }
-    return { manager, name: selected.name };
+    return { manager: selected.manager, name: selected.name, directory: selected.directory };
   }
   async run(
     root: vscode.Uri,
-    choice: { manager: string; name: string },
+    choice: TestScriptChoice,
     saved: boolean,
     publish: (result: TestResult) => void,
+    isCurrent: () => boolean = () => true,
   ) {
-    if (this.cancel || this.disposed) {
+    if (this.cancel || this.disposed || this.preparing) {
       throw new Error('A test run is already active.');
     }
     if (
@@ -61,8 +90,36 @@ export class TestRunner implements vscode.Disposable {
     ) {
       throw new Error('Invalid test task.');
     }
+    const directory = choice.directory ?? '';
+    if (isAbsolute(directory) || directory.split(/[\\/]/).includes('..')) {
+      throw new Error('Invalid package directory.');
+    }
+    const generation = this.generation;
+    let cwd: string;
+    this.preparing = true;
+    try {
+      cwd = await realpath(vscode.Uri.joinPath(root, directory).fsPath);
+      const inside = relative(await realpath(root.fsPath), cwd);
+      if (inside.startsWith('..') || isAbsolute(inside)) {
+        throw new Error('Test package is outside the workspace.');
+      }
+      const manifest = JSON.parse(
+        Buffer.from(
+          await vscode.workspace.fs.readFile(vscode.Uri.file(cwd + '/package.json')),
+        ).toString('utf8'),
+      );
+      if (typeof manifest.scripts?.[choice.name] !== 'string') {
+        throw new Error('Selected test script no longer exists.');
+      }
+
+      if (this.disposed || generation !== this.generation || !isCurrent()) {
+        throw new Error('Test start cancelled or source changed.');
+      }
+    } finally {
+      this.preparing = false;
+    }
     const result: TestResult = {
-      name: `${choice.manager} run ${choice.name}`,
+      name: `${directory || 'Workspace root'} · ${choice.manager} run ${choice.name}`,
       state: 'running',
       output: '',
       truncated: false,
@@ -142,8 +199,11 @@ export class TestRunner implements vscode.Disposable {
           return;
         }
         try {
+          if (!isCurrent()) {
+            throw new Error('Source changed before task execution.');
+          }
           child = spawn(choice.manager, ['run', choice.name], {
-            cwd: root.fsPath,
+            cwd,
             shell: false,
             detached: process.platform !== 'win32',
             env: process.env,
@@ -202,6 +262,7 @@ export class TestRunner implements vscode.Disposable {
     }
   }
   stop() {
+    this.generation++;
     this.choosing?.cancel();
     this.cancel?.();
   }
