@@ -1,11 +1,15 @@
+import { SourceSummary } from './SourceSummary';
+import type { ContextBundle } from '../../shared/context';
+import { ProposalReview } from './ProposalReview';
+import { VerificationPanel } from './VerificationPanel';
 import { AiActions } from './AiActions';
 import type { AiGraphAction } from '../../shared/ai-actions';
-import type { AiTurn } from '../../shared/conversation';
 import { AiMarkdown } from './AiMarkdown';
 import type { PreparedContext } from '../hooks/useContextPreview';
-import React, { useEffect, useRef, useState } from 'react';
-import type { AiModelInfo, AiProposal, AiReference } from '../../shared/ai';
-import type { HostMessage, SyncState } from '../../shared/model';
+import React from 'react';
+import { useAssistantSession } from '../hooks/useAssistantSession';
+import type { AiReference } from '../../shared/ai';
+import type { SyncState } from '../../shared/model';
 import { send } from '../bridge';
 
 export function AiAssistant({
@@ -17,7 +21,17 @@ export function AiAssistant({
   revision,
   fileCount,
   sync,
+  contextContent,
+  contextSummary,
+  contextWarning,
+  contextBundle,
+  intent,
 }: {
+  contextBundle?: ContextBundle;
+  contextContent?: React.ReactNode;
+  contextSummary?: string;
+  contextWarning?: string;
+  intent?: { mode: 'ask' | 'propose'; id: string };
   prepareContext: (action?: 'ask' | 'propose') => Promise<PreparedContext>;
   onAction: (action: AiGraphAction) => void;
   regionKey: string;
@@ -27,464 +41,481 @@ export function AiAssistant({
   fileCount: number;
   sync: SyncState;
 }) {
-  const [turns, setTurns] = useState<AiTurn[]>([]);
-  const [connection, setConnection] = useState<{ state: string; message: string }>({
-    state: 'unknown',
-    message: '',
+  const {
+    conflict,
+    tab,
+    setTab,
+    input,
+    chatScroll,
+    followAnswer,
+    turns,
+    setTurns,
+    connection,
+    usage,
+    setUsage,
+    pendingAction,
+    setPendingAction,
+    copied,
+    setCopied,
+    model,
+    configuredId,
+    modelError,
+    question,
+    setQuestion,
+    text,
+    setText,
+    error,
+    busy,
+    mode,
+    setMode,
+    preparing,
+    verification,
+    verificationError,
+    includeVerification,
+    setIncludeVerification,
+    appliedIds,
+    proposalState,
+    proposal,
+    setProposal,
+    references,
+    reviewed,
+    applying,
+    setApplying,
+    request,
+    proposalId,
+    ready,
+    stop,
+    start,
+  } = useAssistantSession({
+    prepareContext,
+    onAction,
+    regionKey,
+    conversationKey,
+    rootId,
+    revision,
+    fileCount,
+    sync,
+    intent,
   });
-  const [usage, setUsage] = useState<{
-    inputTokens: number;
-    maxInputTokens: number;
-    historyTurns: number;
-  }>();
-  const [pendingAction, setPendingAction] = useState<string>();
-  const actionHandler = useRef(onAction);
-  actionHandler.current = onAction;
-  const currentGraph = useRef({ rootId, revision });
-  currentGraph.current = { rootId, revision };
-  const [copied, setCopied] = useState('');
-  const conversation = useRef(conversationKey);
-  conversation.current = conversationKey;
-  const [model, setModel] = useState<AiModelInfo>();
-  const [configuredId, setConfiguredId] = useState('');
-  const [modelError, setModelError] = useState('');
-  const [question, setQuestion] = useState('');
-  const [text, setText] = useState('');
-  const [error, setError] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [mode, setMode] = useState<'ask' | 'propose'>('ask');
-  const [preparing, setPreparing] = useState(false);
-  const [proposal, setProposal] = useState<AiProposal>();
-  const [references, setReferences] = useState<AiReference[]>([]);
-  const [reviewed, setReviewed] = useState<string[]>([]);
-  const [applying, setApplying] = useState(false);
-  const request = useRef<string | undefined>(undefined);
-  const proposalId = useRef<string | undefined>(undefined);
-  useEffect(() => {
-    const receive = (event: MessageEvent<HostMessage>) => {
-      const value = event.data;
-      if (value.type === 'aiAction') {
-        setPendingAction(undefined);
-        if (
-          value.rootId === currentGraph.current.rootId &&
-          value.revision === currentGraph.current.revision &&
-          value.regionKey === conversation.current
-        ) {
-          actionHandler.current(value.action);
-        }
-      } else if (value.type === 'aiActionError') {
-        setPendingAction(undefined);
-        setError(value.message);
-      } else if (value.type === 'aiConversation' && value.regionKey === conversation.current) {
-        setTurns(value.turns);
-      } else if (value.type === 'aiConnection') {
-        setConnection(value);
-      } else if (value.type === 'aiCopied') {
-        setCopied(value.requestId);
-      } else if (value.type === 'aiUsage' && value.requestId === request.current) {
-        setUsage(value);
-      } else if (value.type === 'aiModel') {
-        setModel(value.model);
-        setConfiguredId(value.configuredId);
-        setModelError(value.error ?? '');
-      } else if (value.type === 'aiProgress' && value.requestId === request.current) {
-        setBusy(!value.done);
-        if (value.text) {
-          setText(value.text);
-        }
-        setError(value.error ?? '');
-        if (value.done) {
-          if (!value.error) {
-            setConnection({ state: 'ready', message: 'Model responded successfully.' });
-          }
-          setProposal(value.proposal);
-          proposalId.current = value.proposal?.id;
-          setReferences(value.references ?? []);
-        }
-      } else if (value.type === 'aiDiffOpened' && value.proposalId === proposalId.current) {
-        setReviewed((ids) => [...new Set([...ids, value.fileId])]);
-      } else if (value.type === 'aiApplied' && value.proposalId === proposalId.current) {
-        setApplying(false);
-        setError(value.error ?? '');
-        if (!value.error) {
-          setProposal(undefined);
-          proposalId.current = undefined;
-          setText('Changes applied to editor buffers. Review and save them when ready.');
-        }
-      }
-    };
-    window.addEventListener('message', receive);
-    send({ type: 'aiStatus' });
-    return () => {
-      window.removeEventListener('message', receive);
-      send({ type: 'aiCancel' });
-    };
-  }, []);
-  useEffect(() => {
-    send({ type: 'aiCancel' });
-    request.current = undefined;
-    proposalId.current = undefined;
-    setPendingAction(undefined);
-    setBusy(false);
-    setPreparing(false);
-    setApplying(false);
-    setProposal(undefined);
-    setReferences([]);
-    setReviewed([]);
-    setError('');
-    setText('');
-  }, [regionKey]);
-  useEffect(() => {
-    setTurns([]);
-    setUsage(undefined);
-    send({ type: 'aiHistory', rootId, regionKey: conversationKey });
-  }, [rootId, conversationKey]);
-  useEffect(() => {
-    if (sync !== 'up-to-date') {
-      request.current = undefined;
-      setPreparing(false);
-      send({ type: 'aiCancel' });
-      setBusy(false);
-    }
-  }, [sync]);
-  const ready = fileCount > 0 && sync === 'up-to-date';
-  const stop = () => {
-    request.current = undefined;
-    send({ type: 'aiCancel' });
-    setBusy(false);
-    setPreparing(false);
-    setError('Request stopped.');
-  };
-  const start = async (action: 'ask' | 'propose') => {
-    const requestId = crypto.randomUUID();
-    request.current = requestId;
-    proposalId.current = undefined;
-    setBusy(true);
-    setPreparing(true);
-    setProposal(undefined);
-    setReferences([]);
-    setReviewed([]);
-    setText('');
-    setError('');
-    setUsage(undefined);
-    setCopied('');
-    try {
-      const prepared = await prepareContext(action);
-      if (request.current !== requestId) {
-        return;
-      }
-      setPreparing(false);
-      send({
-        type: 'aiRequest',
-        rootId: prepared.bundle.rootId,
-        contextId: prepared.contextId,
-        requestId,
-        question,
-        mode: action,
-      });
-    } catch (error) {
-      if (request.current === requestId) {
-        setBusy(false);
-        setPreparing(false);
-        setError(String(error));
-      }
-    }
-  };
   return (
-    <section className="ai-assistant" aria-label="CodeMap AI">
-      <div className="ai-section-title">
-        <div className="ai-identity">
-          <span className="ai-avatar" aria-hidden="true">
-            ✦
-          </span>
-          <div>
-            <strong>CodeMap Assistant</strong>
-            <small>Understand & improve your code</small>
-          </div>
-        </div>
-        <span
-          className={`ai-connection ${connection.state === 'ready' ? 'connected' : ''}`}
-          title="Models supplied by VS Code"
-        >
-          {connection.state === 'checking'
-            ? 'Checking…'
-            : connection.state === 'ready'
-              ? 'Verified'
-              : model || configuredId
-                ? 'Selected'
-                : 'Set up'}
-        </span>
-      </div>
-      <button
-        className="ai-model-picker"
-        disabled={busy || applying}
-        onClick={() => send({ type: 'aiChooseModel' })}
-      >
-        <span>
-          <small>MODEL · {model?.vendor ?? 'VS Code'}</small>
-          <strong>{model?.name ?? (configuredId || 'Select a model')}</strong>
-        </span>
-        <span aria-hidden="true">⌄</span>
-      </button>
-      <div className="ai-connection-actions">
+    <section className="ai-assistant assistant-workspace" aria-label="CodeMap AI">
+      <div className="assistant-model-row">
+        {' '}
         <button
-          disabled={
-            busy || applying || connection.state === 'checking' || (!model && !configuredId)
-          }
-          onClick={() => send({ type: 'aiTestConnection' })}
-        >
-          Test connection
-        </button>
-        <small>No source sent</small>
-      </div>
-      {connection.message && (
-        <p
-          className={connection.state === 'error' ? 'context-warning' : 'helper-text'}
-          role="status"
-        >
-          {connection.message}
-        </p>
-      )}
-      {modelError && (
-        <p role="alert" className="context-warning">
-          {modelError}
-        </p>
-      )}
-      <div className="ai-composer">
-        <div className="ai-mode-tabs" role="group" aria-label="AI action">
-          <button
-            aria-pressed={mode === 'ask'}
-            disabled={busy || applying}
-            onClick={() => setMode('ask')}
-          >
-            Ask
-          </button>
-          <button
-            aria-pressed={mode === 'propose'}
-            disabled={busy || applying}
-            onClick={() => setMode('propose')}
-          >
-            Edit
-          </button>
-          <span>
-            {fileCount} {fileCount === 1 ? 'file' : 'files'}
-          </span>
-        </div>
-        <textarea
-          aria-label="Ask about selected source"
-          placeholder={
-            mode === 'ask'
-              ? 'What would you like to understand?'
-              : 'Describe the change you want to make…'
-          }
-          value={question}
-          maxLength={8000}
-          rows={4}
-          onChange={(e) => setQuestion(e.target.value)}
+          className="ai-model-picker"
           disabled={busy || applying}
-          onKeyDown={(e) => {
-            if (
-              (e.metaKey || e.ctrlKey) &&
-              e.key === 'Enter' &&
-              ready &&
-              question.trim() &&
-              !busy &&
-              !applying &&
-              (model || configuredId)
-            ) {
-              e.preventDefault();
-              void start(mode);
-            }
+          onClick={() => send({ type: 'aiChooseModel' })}
+        >
+          <span>
+            <small>MODEL · {model?.vendor ?? 'VS Code'}</small>
+            <strong>{model?.name ?? (configuredId || 'Select a model')}</strong>
+          </span>
+          <span aria-hidden="true">⌄</span>
+        </button>
+        <details className="assistant-model-settings">
+          <summary aria-label="Model connection settings">⚙</summary>
+          <div>
+            {' '}
+            <div className="ai-connection-actions">
+              <button
+                disabled={
+                  busy || applying || connection.state === 'checking' || (!model && !configuredId)
+                }
+                onClick={() => send({ type: 'aiTestConnection' })}
+              >
+                Test connection
+              </button>
+              <small>No source sent</small>
+            </div>
+            {connection.message && (
+              <p
+                className={connection.state === 'error' ? 'context-warning' : 'helper-text'}
+                role="status"
+              >
+                {connection.message}
+              </p>
+            )}
+            {modelError && (
+              <p role="alert" className="context-warning">
+                {modelError}
+              </p>
+            )}
+          </div>
+        </details>
+      </div>
+      <div className="assistant-tabs" role="tablist" aria-label="Assistant sections">
+        {(['chat', 'changes', 'context'] as const).map((id) => (
+          <button
+            key={id}
+            id={`assistant-tab-${id}`}
+            role="tab"
+            aria-selected={tab === id}
+            aria-controls={`assistant-page-${id}`}
+            tabIndex={tab === id ? 0 : -1}
+            onClick={() => setTab(id)}
+            onKeyDown={(event) => {
+              const ids = ['chat', 'changes', 'context'] as const;
+              const index = ids.indexOf(id);
+              const next =
+                event.key === 'ArrowRight'
+                  ? ids[(index + 1) % 3]
+                  : event.key === 'ArrowLeft'
+                    ? ids[(index + 2) % 3]
+                    : event.key === 'Home'
+                      ? 'chat'
+                      : event.key === 'End'
+                        ? 'context'
+                        : undefined;
+              if (next) {
+                event.preventDefault();
+                setTab(next);
+                document.getElementById(`assistant-tab-${next}`)?.focus();
+              }
+            }}
+          >
+            {id === 'chat' ? 'Chat' : id === 'changes' ? 'Changes' : 'Context'}
+            {id !== 'chat' && (
+              <span>{id === 'changes' ? (proposal?.changes.length ?? 0) : fileCount}</span>
+            )}
+          </button>
+        ))}
+      </div>
+      <div
+        className="assistant-page assistant-chat"
+        id="assistant-page-chat"
+        role="tabpanel"
+        aria-labelledby="assistant-tab-chat"
+        hidden={tab !== 'chat'}
+      >
+        <button className="assistant-context-strip" onClick={() => setTab('context')}>
+          <span>
+            <small>SOURCE</small>
+            <strong title={contextSummary}>{contextSummary ?? `${fileCount} files`}</strong>
+          </span>
+          <span>Manage →</span>
+        </button>
+        <div
+          className="assistant-chat-scroll"
+          ref={chatScroll}
+          onScroll={(event) => {
+            const node = event.currentTarget;
+            followAnswer.current = node.scrollHeight - node.scrollTop - node.clientHeight < 64;
           }}
-        />
-        <div className="ai-composer-footer">
-          <small>
-            {preparing ? 'Preparing context…' : busy ? 'Generating…' : '⌘ / Ctrl + Enter'}
-          </small>
-          {busy ? (
-            <button onClick={stop}>Stop</button>
-          ) : (
-            <button
-              className="primary"
-              disabled={!ready || !question.trim() || applying || (!model && !configuredId)}
-              onClick={() => {
-                void start(mode);
+        >
+          {!question && !text && !busy && !turns.length && (
+            <div className="assistant-empty">
+              <span aria-hidden="true">✦</span>
+              <h3>
+                {!fileCount
+                  ? 'Start with a file'
+                  : mode === 'propose'
+                    ? 'Describe the change'
+                    : 'Explore your selected source'}
+              </h3>
+              <p>
+                {fileCount
+                  ? mode === 'propose'
+                    ? 'Explain what should change. Review each proposed edit before applying it.'
+                    : 'Ask how it works or find a potential issue.'
+                  : 'Select a node on the graph or add files in Context.'}
+              </p>
+              <div className="ai-suggestions">
+                {(mode === 'propose'
+                  ? ['Improve readability without changing behavior', 'Fix a potential bug']
+                  : ['Explain this region', 'Find potential issues']
+                ).map((prompt) => (
+                  <button
+                    key={prompt}
+                    onClick={() => {
+                      setQuestion(prompt);
+                      input.current?.focus();
+                    }}
+                  >
+                    {prompt}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+          {error && (
+            <p role="alert" className="context-warning">
+              {error}
+            </p>
+          )}
+          {!!turns.length && (
+            <div className="ai-thread">
+              <div className="section-toolbar">
+                <span className="eyebrow">Conversation · {turns.length} turns</span>
+                <button
+                  disabled={busy || applying}
+                  className="quiet-button"
+                  onClick={() => {
+                    send({ type: 'aiClearHistory', rootId, regionKey: conversationKey });
+                    setText('');
+                    setProposal(undefined);
+                    proposalId.current = undefined;
+                    setUsage(undefined);
+                    setCopied('');
+                  }}
+                >
+                  Clear
+                </button>
+              </div>
+              {turns.map((turn) => {
+                const stale = turn.revision !== revision || sync !== 'up-to-date';
+                const copy = (value: string) =>
+                  send({ type: 'aiCopy', requestId: turn.id, text: value });
+                const open = (ref: AiReference) =>
+                  send({
+                    type: 'aiOpenReference',
+                    requestId: turn.id,
+                    fileId: ref.fileId,
+                    line: ref.line,
+                  });
+                return (
+                  <article className="ai-history-turn" key={turn.id}>
+                    <div className="ai-user-question">{turn.question}</div>
+                    <div className="ai-answer-heading">
+                      <span>✦ {turn.model || 'Assistant'}</span>
+                      <button className="quiet-button" onClick={() => copy(turn.answer)}>
+                        {copied === turn.id ? 'Copied' : 'Copy'}
+                      </button>
+                    </div>
+                    {stale && (
+                      <p className="ai-stale">
+                        Source updated since this answer · revision {turn.revision}
+                      </p>
+                    )}
+                    {turn.error && <p className="context-warning">{turn.error}</p>}
+                    <AiMarkdown
+                      text={turn.answer}
+                      references={turn.references}
+                      onReference={stale ? undefined : open}
+                      onCopy={copy}
+                    />
+                    <AiActions
+                      actions={turn.actions}
+                      warnings={turn.actionWarnings}
+                      disabled={stale || busy || applying}
+                      pending={pendingAction}
+                      onRun={(action) => {
+                        setPendingAction(action.id);
+                        send({
+                          type: 'aiExecuteAction',
+                          requestId: turn.id,
+                          actionId: action.id,
+                          rootId,
+                          regionKey: conversationKey,
+                        });
+                      }}
+                    />
+                  </article>
+                );
+              })}
+            </div>
+          )}
+          {text && !turns.some((turn) => turn.id === request.current) && (
+            <div className="ai-answer" aria-label="AI response">
+              <div className="ai-answer-heading">
+                <span>✦ {proposal ? 'Suggested change' : 'Assistant'}</span>
+                {busy && <small>Responding…</small>}
+              </div>
+              <AiMarkdown text={text} />
+            </div>
+          )}
+          {!!references.length && !turns.some((turn) => turn.id === request.current) && (
+            <div className="ai-citations">
+              <span className="eyebrow">Source references</span>
+              {references.map((ref) => (
+                <button
+                  key={`${ref.fileId}:${ref.line}`}
+                  onClick={() =>
+                    send({
+                      type: 'aiOpenReference',
+                      requestId: request.current!,
+                      fileId: ref.fileId,
+                      line: ref.line,
+                    })
+                  }
+                >
+                  {ref.path} · L{ref.line}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+        <div className="assistant-source-meta">
+          <SourceSummary
+            fileCount={fileCount}
+            bundle={contextBundle}
+            regionKey={regionKey}
+            mode={mode}
+            ready={ready}
+            busy={busy || applying}
+            prepare={prepareContext}
+            onManage={() => setTab('context')}
+          />
+        </div>
+        <div className="assistant-composer-dock">
+          {!!turns.length && (
+            <p className="assistant-history-note">
+              Follow-ups use the current files/symbol region above. Earlier answers may refer to
+              older source.
+            </p>
+          )}
+          <div className="ai-composer assistant-composer">
+            <div className="ai-mode-tabs" role="group" aria-label="AI action">
+              <button
+                aria-pressed={mode === 'ask'}
+                disabled={busy || applying}
+                onClick={() => setMode('ask')}
+              >
+                Ask
+              </button>
+              <button
+                aria-pressed={mode === 'propose'}
+                disabled={busy || applying}
+                onClick={() => setMode('propose')}
+              >
+                Edit
+              </button>
+              <span>
+                {fileCount} {fileCount === 1 ? 'file' : 'files'}
+              </span>
+            </div>
+            <textarea
+              ref={input}
+              aria-label={mode === 'ask' ? 'Ask about selected source' : 'Describe source changes'}
+              placeholder={
+                mode === 'ask'
+                  ? 'What would you like to understand?'
+                  : 'Describe the change you want to make…'
+              }
+              value={question}
+              maxLength={8000}
+              rows={4}
+              onChange={(e) => setQuestion(e.target.value)}
+              disabled={busy || applying}
+              onKeyDown={(e) => {
+                if (
+                  (e.metaKey || e.ctrlKey) &&
+                  e.key === 'Enter' &&
+                  ready &&
+                  question.trim() &&
+                  !busy &&
+                  !applying &&
+                  (model || configuredId)
+                ) {
+                  e.preventDefault();
+                  void start(mode);
+                }
               }}
-            >
-              {mode === 'ask' ? 'Ask selection ↗' : 'Propose changes ↗'}
-            </button>
+            />
+            {(error || contextWarning) && (
+              <p role="alert" className="context-warning">
+                {error || contextWarning}
+              </p>
+            )}
+            <div className="ai-composer-footer">
+              <small>
+                {preparing ? 'Preparing context…' : busy ? 'Generating…' : '⌘ / Ctrl + Enter'}
+              </small>
+              {busy ? (
+                <button onClick={stop}>Stop</button>
+              ) : (
+                <button
+                  className="primary"
+                  disabled={!ready || !question.trim() || applying || (!model && !configuredId)}
+                  onClick={() => {
+                    void start(mode);
+                  }}
+                >
+                  {mode === 'ask' ? 'Ask selection ↗' : 'Propose changes ↗'}
+                </button>
+              )}
+            </div>
+          </div>
+          <p className="ai-disclosure">
+            {!fileCount
+              ? 'Select files on the graph to begin.'
+              : sync !== 'up-to-date'
+                ? 'Waiting for graph synchronization…'
+                : 'Selected source is prepared automatically and sent only when you submit.'}
+          </p>
+          {usage && (
+            <p className="helper-text">
+              {usage.inputTokens.toLocaleString()} / {usage.maxInputTokens.toLocaleString()} input
+              tokens · {usage.historyTurns} prior turns included
+            </p>
           )}
         </div>
       </div>
-      <p className="ai-disclosure">
-        {!fileCount
-          ? 'Select files on the graph to begin.'
-          : sync !== 'up-to-date'
-            ? 'Waiting for graph synchronization…'
-            : 'Selected source is prepared automatically and sent only when you submit.'}
-      </p>
-      {usage && (
-        <p className="helper-text">
-          {usage.inputTokens.toLocaleString()} / {usage.maxInputTokens.toLocaleString()} input
-          tokens · {usage.historyTurns} prior turns included
-        </p>
-      )}
-      {!question && !text && !busy && !turns.length && (
-        <div className="ai-suggestions">
-          {['Explain this region', 'Find potential issues'].map((prompt) => (
+      <div
+        className="assistant-page assistant-changes"
+        id="assistant-page-changes"
+        role="tabpanel"
+        aria-labelledby="assistant-tab-changes"
+        hidden={tab !== 'changes'}
+      >
+        {!proposal && (
+          <div className="assistant-empty">
+            <span aria-hidden="true">◇</span>
+            <h3>No proposed changes yet</h3>
+            <p>
+              Describe a change in Edit. You will review each edit here before anything is applied.
+            </p>
             <button
-              key={prompt}
               onClick={() => {
-                setMode('ask');
-                setQuestion(prompt);
+                setTab('chat');
+                setMode('propose');
+                requestAnimationFrame(() => input.current?.focus());
               }}
             >
-              {prompt}
-            </button>
-          ))}
-        </div>
-      )}
-      {error && (
-        <p role="alert" className="context-warning">
-          {error}
-        </p>
-      )}
-      {!!turns.length && (
-        <div className="ai-thread">
-          <div className="section-toolbar">
-            <span className="eyebrow">Conversation · {turns.length} turns</span>
-            <button
-              disabled={busy || applying}
-              className="quiet-button"
-              onClick={() => {
-                send({ type: 'aiClearHistory', rootId, regionKey: conversationKey });
-                setText('');
-                setProposal(undefined);
-                proposalId.current = undefined;
-                setUsage(undefined);
-                setCopied('');
-              }}
-            >
-              Clear
+              Edit with AI →
             </button>
           </div>
-          {turns.map((turn) => {
-            const stale = turn.revision !== revision || sync !== 'up-to-date';
-            const copy = (value: string) =>
-              send({ type: 'aiCopy', requestId: turn.id, text: value });
-            const open = (ref: AiReference) =>
-              send({
-                type: 'aiOpenReference',
-                requestId: turn.id,
-                fileId: ref.fileId,
-                line: ref.line,
-              });
-            return (
-              <article className="ai-history-turn" key={turn.id}>
-                <div className="ai-user-question">{turn.question}</div>
-                <div className="ai-answer-heading">
-                  <span>✦ {turn.model || 'Assistant'}</span>
-                  <button className="quiet-button" onClick={() => copy(turn.answer)}>
-                    {copied === turn.id ? 'Copied' : 'Copy'}
-                  </button>
-                </div>
-                {stale && (
-                  <p className="ai-stale">
-                    Source updated since this answer · revision {turn.revision}
-                  </p>
-                )}
-                {turn.error && <p className="context-warning">{turn.error}</p>}
-                <AiMarkdown
-                  text={turn.answer}
-                  references={turn.references}
-                  onReference={stale ? undefined : open}
-                  onCopy={copy}
-                />
-                <AiActions
-                  actions={turn.actions}
-                  warnings={turn.actionWarnings}
-                  disabled={stale || busy || applying}
-                  pending={pendingAction}
-                  onRun={(action) => {
-                    setPendingAction(action.id);
-                    send({
-                      type: 'aiExecuteAction',
-                      requestId: turn.id,
-                      actionId: action.id,
-                      rootId,
-                      regionKey: conversationKey,
-                    });
-                  }}
-                />
-              </article>
-            );
-          })}
-        </div>
-      )}
-      {text && !turns.some((turn) => turn.id === request.current) && (
-        <div className="ai-answer" aria-label="AI response">
-          <div className="ai-answer-heading">
-            <span>✦ {proposal ? 'Suggested change' : 'Assistant'}</span>
-            {busy && <small>Responding…</small>}
-          </div>
-          <AiMarkdown text={text} />
-        </div>
-      )}
-      {!!references.length && !turns.some((turn) => turn.id === request.current) && (
-        <div className="ai-citations">
-          <span className="eyebrow">Source references</span>
-          {references.map((ref) => (
-            <button
-              key={`${ref.fileId}:${ref.line}`}
-              onClick={() =>
-                send({
-                  type: 'aiOpenReference',
-                  requestId: request.current!,
-                  fileId: ref.fileId,
-                  line: ref.line,
-                })
-              }
-            >
-              {ref.path} · L{ref.line}
-            </button>
-          ))}
-        </div>
-      )}
-      {proposal && (
-        <div className="ai-proposal">
-          <span className="eyebrow">{proposal.changes.length} proposed file changes</span>
-          {proposal.changes.map((change) => (
-            <div className="ai-change" key={change.fileId}>
-              <span title={change.path}>{change.path}</span>
-              <button
-                onClick={() => {
-                  send({ type: 'aiDiff', proposalId: proposal.id, fileId: change.fileId });
-                }}
-              >
-                {reviewed.includes(change.fileId) ? 'Reopen diff' : 'Review diff'}
-              </button>
-            </div>
-          ))}
-          {!!proposal.changes.length && (
-            <>
-              <p className="helper-text">
-                Review each diff before applying. Source changes since preview will block Apply.
-                Changes remain unsaved and can be undone in VS Code.
-              </p>
-              <button
-                className="primary"
-                disabled={!ready || applying || reviewed.length !== proposal.changes.length}
-                onClick={() => {
-                  setApplying(true);
-                  send({ type: 'aiApply', proposalId: proposal.id });
-                }}
-              >
-                {applying ? 'Applying…' : 'Apply reviewed changes'}
-              </button>
-            </>
-          )}
-        </div>
-      )}
+        )}
+        {error && (
+          <p className="context-warning" role="alert">
+            {error}
+          </p>
+        )}
+        {proposal && (
+          <ProposalReview
+            appliedIds={appliedIds}
+            proposal={proposal}
+            reviewed={reviewed}
+            state={proposalState}
+            applying={applying}
+            ready={ready}
+            conflict={conflict}
+            onRegenerate={() => {
+              setMode('propose');
+              setTab('chat');
+              requestAnimationFrame(() => input.current?.focus());
+            }}
+            onApply={() => setApplying(true)}
+          />
+        )}
+        {verification && (
+          <VerificationPanel
+            report={verification}
+            error={verificationError}
+            include={includeVerification}
+            onInclude={setIncludeVerification}
+            onAction={onAction}
+          />
+        )}
+      </div>
+      <div
+        className="assistant-page assistant-context"
+        id="assistant-page-context"
+        role="tabpanel"
+        aria-labelledby="assistant-tab-context"
+        hidden={tab !== 'context'}
+      >
+        {contextContent}
+      </div>
     </section>
   );
 }

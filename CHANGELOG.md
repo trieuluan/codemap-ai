@@ -1,5 +1,19 @@
 # Change Log
 
+## 0.8.0
+
+- Prepare a local context summary before submission; expose token estimates, excerpt ranges and truncated/omitted files.
+- Group edits by file with bulk acceptance/rejection, accepted review progress and next-diff navigation. Report structured source conflicts without applying partial changes.
+
+- Redesign the Assistant sidebar with Chat/Changes/Context tabs, direct Ask/Edit shortcuts, a bottom composer, optional source settings and keyboard-accessible resizing.
+
+- Replace full-file AI replacements with validated range edits, exact original text and conservative conflict-aware rebasing.
+- Review, accept/reject and Apply individual edits; preserve applied proposal status through graph refresh and sidebar remounts.
+- Observe VS Code diagnostics, directed import deltas and static dependents after Apply; keep Apply successful when verification refresh fails.
+- Run a user-selected root package test script in a cancellable VS Code task, with optional saving, exit status and bounded output.
+- Keep verification local by default; explicitly include a current report and test log in the next Ask.
+- Add range, partial Apply, diagnostics and real task integration coverage. Live-model workflow remains unavailable in the isolated profile; see docs/QA-v0.8.md.
+
 ## 0.7.0
 
 - Add validated AI suggestions to request file/symbol context, focus files, show directed import paths, inspect declarations and analyze impact.

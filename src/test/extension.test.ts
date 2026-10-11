@@ -89,6 +89,14 @@ suite('CodeMap extension integration', () => {
       const a = graph.nodes.find((node) => node.name === 'a.ts')!;
       const site = graph.edges[0].sites[0];
       await panel.handleMessage({ type: 'openImport', nodeId: a.id, siteId: site.id });
+      // Editor activation can arrive after showTextDocument resolves in the desktop host.
+      const deadline = Date.now() + 2000;
+      while (
+        vscode.window.activeTextEditor?.document.uri.toString() !== a.id &&
+        Date.now() < deadline
+      ) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
       assert.equal(vscode.window.activeTextEditor?.document.uri.toString(), a.id);
       assert.equal(vscode.window.activeTextEditor?.selection.start.line, site.line);
       assert.equal(vscode.window.activeTextEditor?.selection.start.character, site.character);

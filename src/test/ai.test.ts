@@ -190,7 +190,19 @@ suite('CodeMap AI integration (fake model, no network)', () => {
         model(
           JSON.stringify({
             summary: 'Replace entry',
-            changes: [{ path: file.path, content: replacement }],
+            changes: [
+              {
+                path: file.path,
+                start: { line: 1, character: 0 },
+                end: {
+                  line: file.content.split('\n').length,
+                  character: file.content.split('\n').at(-1)!.length,
+                },
+                oldText: file.content,
+                content: replacement,
+                reason: 'Replace synthetic entry',
+              },
+            ],
           }),
         ),
       ],
@@ -221,7 +233,7 @@ suite('CodeMap AI integration (fake model, no network)', () => {
       assert.equal(document.getText(), file.content);
       await session.diff(id, file.id);
       assert.ok(messages.some((m) => m.type === 'aiDiffOpened'));
-      await replace(file.content + '// unsaved concurrent edit');
+      await replace('// unsaved concurrent edit\n' + file.content.replace('1', '9'));
       await session.apply(id);
       assert.ok(
         messages.some((m) => m.type === 'aiApplied' && m.error?.includes('Source changed')),

@@ -1,6 +1,6 @@
 # CodeMap AI
 
-Explore TypeScript and JavaScript file dependencies as an interactive graph inside VS Code. v0.7 adds AI suggestions that navigate the graph and request more context, building on AI questions and reviewed code proposals through VS Code models, alongside Architecture Overview, navigation history, Saved Views, architecture notes, symbol exploration and impact analysis.
+Explore TypeScript and JavaScript file dependencies as an interactive graph inside VS Code. v0.8 adds individual range-edit review and post-Apply verification, building on graph suggestions, AI questions and reviewed code proposals through VS Code models, alongside Architecture Overview, navigation history, Saved Views, architecture notes, symbol exploration and impact analysis.
 
 ## Run locally
 
@@ -90,7 +90,7 @@ The nearest ancestor `tsconfig.json`/`jsconfig.json` within the root supplies re
 | excluded | Target resolves inside the root but is outside the scanned set |
 | unresolved | TypeScript cannot resolve the target; no speculative edge is created |
 
-Bundler-only aliases and runtime-computed imports remain unsupported. CSS imports normally appear unresolved unless the TypeScript resolver finds a declaration. `require` detection is syntactic and does not check shadowing. This is a file graph, not a call graph or business architecture. Desktop filesystem workspaces only; no VS Code Web/virtual workspace support. Graph analysis and context previews stay local. AI requests send reviewed context to the model provider you select through VS Code; that provider manages authentication, network processing and quotas.
+Bundler-only aliases and runtime-computed imports remain unsupported. CSS imports normally appear unresolved unless the TypeScript resolver finds a declaration. `require` detection is syntactic and does not check shadowing. This is a file graph, not a call graph or business architecture. Desktop filesystem workspaces only; no VS Code Web/virtual workspace support. Graph analysis and context previews stay local. User-selected post-Apply test tasks execute project scripts locally. AI requests send reviewed context to the model provider you select through VS Code; that provider manages authentication, network processing and quotas.
 
 The initial target is about 200 files; 1,000-file fixtures are stress tests, not support guarantees. Package installs are detected through watched metadata and lockfiles; use Refresh if an external tool changes dependencies without those signals.
 
@@ -148,7 +148,7 @@ The sidebar lists modules, incoming/outgoing file relationships, most imported f
 ## Build a local context region (v0.5)
 
 1. **Shift-click** file/folder nodes to add/remove their files, or use **+ Add file/folder to context** in Details.
-2. Open **Context**. Search to add hidden files; optionally include **direct** dependencies/dependents. Uncheck/remove files you do not want included.
+2. Open **Assistant → Context**. Search to add hidden files; optionally include **direct** dependencies/dependents. Uncheck/remove files you do not want included.
 3. **Preview context** reads current editor contents, including unsaved edits. Review source, declarations, import bindings, dependents, outside imports and matching file/ancestor-folder notes.
 4. **Copy Markdown** copies the reviewed bundle to your local clipboard. No AI provider is contacted, no project code runs and no source is modified.
 
@@ -159,11 +159,13 @@ A source change/Refresh invalidates the preview; wait for synchronization and re
 
 ## AI questions and reviewed edits (v0.6)
 
-1. Open **Context**, select files (Shift-click on the graph or search in the panel), then enter a question directly. **Preview context** is optional; Preview and Copy Markdown remain local.
+The Assistant sidebar separates **Chat**, **Changes** and **Context**. Chat keeps the composer at the bottom; Context manages included files, with source options and preview under an expandable section. A completed edit proposal opens Changes for review. Switching tabs preserves the draft and review choices, and does not stop an active response. Drag the sidebar’s left edge to resize it (or focus the separator and use arrow keys).
+
+1. Open **Assistant**, select files (Shift-click on the graph or use the Context tab), then enter a question in Chat. Selected file details also offer **Ask AI** and **Edit with AI** shortcuts. **Preview context** is optional; Preview and Copy Markdown remain local.
 2. Use **Change model** or **CodeMap: Choose AI Model**. Choose a model exposed through the VS Code Language Model API. Enable/sign in to a compatible provider if none are available. An installed AI extension does not necessarily expose its models to other extensions. No CodeMap API key is required; the provider handles authorization and quotas. The selected model ID is stored in the `codemap.ai.model` user setting.
 3. Enter a question and click **Ask selection**. Context is prepared automatically from the included files when you submit; Ask sends that context, your prompt, bounded conversation history and a graph metadata index described below. Edit sends full selected source and its prompt. Answers render Markdown headings, lists, code blocks and GFM tables. Use Ask/Edit to switch action; ⌘/Ctrl+Enter submits. Replies stream into the panel; **Stop** cancels the request. Valid `[[path:L12]]` citations appear as source buttons. Source links are restricted to reviewed files and valid lines; generated explanations still need review. Replies support **Copy**, **Copy code** and inline source citations. Ask includes up to four successful prior turns from the same file/symbol region; oldest turns are dropped when the token budget requires it. Each follow-up uses freshly prepared source context.
 4. Click **Test connection** (or **CodeMap: Test AI Connection**) to verify the selected model with a short request containing no source. Selected means configured; Verified means a request succeeded. Provider authorization/quota errors appear in the panel. Checks stop after 20 seconds.
-5. For an edit, describe the change and click **Propose changes**. Review each **Review diff** in VS Code, then **Apply reviewed changes**. Every diff must be opened before Apply is enabled. Proposals can replace up to 10 existing, complete context files; new files, deletes, renames, project commands and automatic tests are not supported. Source warnings or truncation block proposals. Any context file changed since preview blocks Apply, including unsaved edits to dependencies. Preview and propose again to resolve a conflict.
+5. For an edit, describe the change and click **Propose changes**. Each proposed range includes exact original text, replacement and reason. Accept/reject individual edits, open each accepted **Review in editor** diff, then **Apply**. Up to 40 non-overlapping edits in 10 complete existing context files; no create/delete/rename. Source warnings or truncation block proposals. Conflicting source near an edit blocks Apply; unrelated edits can be preserved when unchanged surrounding source matches uniquely. Changed supporting context requires a fresh proposal.
 
 Edits are applied as one VS Code workspace edit, remain unsaved, and can be undone through VS Code. The graph refreshes after Apply, including with Auto Update off. Diff documents are read-only snapshots; they do not write project files. Responses, source context and proposals are session-only; CodeMap does not persist them. Focused excerpts is the default for Ask: choose a symbol to prioritize its AST declaration, imports and imported declarations within the included files. Original source line ranges are retained and omitted code is explicitly unknown. Related files are added only using the selection/dependency controls. **Whole files** is available; Edit always prepares whole files. Preview shows an approximate source-only token count; before sending, the model tokenizer checks the complete prompt plus history and displays that input count. The preview character budget is checked against the selected model's token budget before sending; choose fewer files if it is too large. Trusted workspaces are required for AI requests and source-context agent tools.
 
@@ -173,12 +175,12 @@ Enable CodeMap tools in the Chat tool picker. The extension contributes four rea
 
 - `#codemapArchitecture`: modules, central files, entry candidates and static import cycles.
 - `#codemapDependencies`: dependencies, dependents, symbols and import positions for an exact workspace-relative file path.
-- `#codemapSelectedContext`: the latest **Preview context** source and notes. Select and preview files first; this does not silently expand the selection.
+- `#codemapSelectedContext`: the latest locally prepared source and notes. Select files in Assistant and wait for the summary (or use Preview context); this does not silently expand the selection.
 - `#codemapImpact`: transitive static dependents and the import routes explaining them.
 
 Tools use the current synchronized root and full file graph. Agent tool confirmation and model selection are managed by VS Code. They do not automatically become available to every third-party agent extension. The tools themselves do not edit source; the chosen agent may have its own editing capabilities. No standalone MCP server or direct provider/API-key adapter is included in this version.
 
-Conversation history survives graph Refresh and closing/reopening the Context sidebar within the same panel. Answers from earlier revisions are marked stale and their citations disabled until you ask with fresh context. History is separated by root, included files and focused symbol; it is held in memory only (up to eight regions and eight turns/region, with a character cap), and resets when the graph panel closes. **Clear** removes the current region history.
+Conversation history survives graph Refresh and closing/reopening the Assistant sidebar within the same panel. Answers from earlier revisions are marked stale and their citations disabled until you ask with fresh context. History is separated by root, included files and focused symbol; it is held in memory only (up to eight regions and eight turns/region, with a character cap), and resets when the graph panel closes. **Clear** removes the current region history.
 
 Run `pnpm run test:ai:live` for an optional source-free connection smoke test using an isolated VS Code profile and installed extensions. This profile has no copied login credentials; an unavailable result does not determine model availability in your normal signed-in VS Code window. Use **Test connection** there to verify that profile.
 
@@ -204,3 +206,24 @@ Model output must use exact index paths and unambiguous symbol names. Unknown ta
 `pnpm run test:ai:workflow` is an opt-in extension-host check: source-free connection → Explain/citations/context suggestions → follow-up → structured proposal → readonly diff → Apply. It uses disposable synthetic TS files, never workspace source, and restores/removes its temporary buffers/files. When a provider is available this makes model requests subject to its authorization and quotas. Failed model output is reported rather than forced through validation.
 
 Like `test:ai:live`, it starts an isolated profile with installed extensions and does not copy your login credentials. If it reports **unavailable**, use **CodeMap: Test AI Connection** in your normal signed-in development host. Then manually verify a small selected source region with Explain → follow-up → Propose → Review diff → Apply. Automated fake-model coverage does not establish a real provider's response quality.
+
+
+## Review and verify changes (v0.8)
+
+After Apply, the proposal stays marked **applied** and cannot apply again. Rejected edits are left untouched. One workspace edit updates editor buffers without saving; the graph refreshes even with Auto Update off. A verification failure does not undo an already successful Apply.
+
+**After Apply** shows changed files, potential static dependents, resolved import pairs added/removed, and the diagnostics currently reported by VS Code. Use **Show changed files** / **Show impact** to focus the graph. Diagnostics may arrive later; no diagnostics does not mean the project has passed a type check. Reports become **Out of date** when source or graph synchronization changes.
+
+**Choose test · disk only** opens a Quick Pick of root `package.json` scripts named `test` or `test:*`, with their command shown. Selecting a script explicitly runs project code in a VS Code task. **Save changed files & choose test** offers the same choice and saves the Apply's changed files before execution; it may trigger normal save hooks. Other dirty buffers remain unsaved. Disk-only tests may not exercise unsaved AI edits. Model replies never select or run commands. Package manager comes from `packageManager` (npm/pnpm/yarn/bun), otherwise npm; monorepo subpackage task selection is not yet supported.
+
+The report records running/passed/failed/cancelled, exit code, and up to 32,000 output characters. **Stop test**, closing the panel or changing root stops the task; a five-minute timeout bounds execution. Apply is blocked while a test choice/run is active.
+
+Reports/logs stay local. Check **Include this report and test output in the next Ask** to send a current, completed report with your next question; normal input-token limits still apply. Source changes disable sharing that stale report. Proposals, reports and logs are session-only, not saved to workspace storage.
+
+See [v0.8 verification and remaining manual checks](docs/QA-v0.8.md). The isolated live-model test currently exposes zero models; validate the full workflow in your normal signed-in VS Code development host.
+
+### Context summary and grouped review
+
+The Chat composer prepares a local context summary automatically (no model request): included file count, approximate context tokens, whole-file/focused mode, excerpt line ranges, and omitted/truncated source. Expand the summary to inspect individual files. The estimate excludes your question, conversation history and provider overhead; actual input usage appears after submission. Edit always prepares whole files. Follow-ups use the currently selected file/symbol region; old answers are not evidence about newly changed source. Source synchronization invalidates the previous preparation.
+
+Changes groups edits by file, with **Accept file**, **Reject file**, and **Review next** for accepted edits that have not been reviewed. The progress counter tracks accepted edits only. Apply remains disabled until all accepted edits have been reviewed. If source conflicts, the affected range is highlighted and nothing is applied; **Prepare a new proposal** returns to Edit with your request preserved. Wait for synchronization (or Refresh when Auto Update is off), then submit a fresh proposal.

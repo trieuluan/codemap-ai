@@ -55,6 +55,7 @@ export function App() {
   const [libraryOpen, setLibraryOpen] = useState(false);
   const [overviewOpen, setOverviewOpen] = useState(false);
   const [overviewDepth, setOverviewDepth] = useState(2);
+  const [assistantIntent, setAssistantIntent] = useState<{ mode: 'ask' | 'propose'; id: string }>();
   const [contextOpen, setContextOpen] = useState(false);
   const [contextIds, setContextIds] = useState<string[]>([]);
   const [notice, setNotice] = useState('');
@@ -671,6 +672,10 @@ export function App() {
     setContextOpen(true);
     setLibraryOpen(false);
   };
+  const openAssistant = (mode: 'ask' | 'propose', ids: string[]) => {
+    addContext(ids);
+    setAssistantIntent({ mode, id: crypto.randomUUID() });
+  };
   const openOverview = () => {
     if (snapshot) {
       setOverviewDepth((depth) =>
@@ -745,6 +750,9 @@ export function App() {
         <GraphToolbar
           onOverview={openOverview}
           onContext={() => {
+            if (!contextOpen && !contextIds.length && file) {
+              setContextIds([file.id]);
+            }
             setContextOpen(!contextOpen);
             setLibraryOpen(false);
           }}
@@ -955,6 +963,7 @@ export function App() {
           {contextOpen && snapshot ? (
             <ContextPanel
               key={snapshot.root.id}
+              intent={assistantIntent}
               snapshot={snapshot}
               selected={contextIds.filter((id) => filesById.has(id))}
               selectedSymbol={snapshot.nodes
@@ -1061,12 +1070,22 @@ export function App() {
             <DetailsPanel
               contextAction={
                 file || group ? (
-                  <button
-                    className="quiet-button"
-                    onClick={() => addContext(file ? [file.id] : group!.members)}
-                  >
-                    + Add {file ? 'file' : 'folder'} to context
-                  </button>
+                  <div className="assistant-file-actions">
+                    <button onClick={() => openAssistant('ask', file ? [file.id] : group!.members)}>
+                      ✦ Ask AI
+                    </button>
+                    <button
+                      onClick={() => openAssistant('propose', file ? [file.id] : group!.members)}
+                    >
+                      Edit with AI
+                    </button>
+                    <button
+                      className="quiet-button"
+                      onClick={() => addContext(file ? [file.id] : group!.members)}
+                    >
+                      Add to context
+                    </button>
+                  </div>
                 ) : undefined
               }
               annotationEditor={

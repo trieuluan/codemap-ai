@@ -65,7 +65,7 @@ export function GraphToolbar({
         Overview
       </button>
       <button disabled={!hasSnapshot} onClick={onContext}>
-        Context{contextCount ? ` (${contextCount})` : ''}
+        Assistant{contextCount ? ` (${contextCount})` : ''}
       </button>
       <button onClick={onLibrary}>Saved Views</button>
       <div className="brand">

@@ -1,3 +1,4 @@
+import type { VerificationReport } from './verification';
 import type { AiGraphAction } from './ai-actions';
 import type { AiTurn } from './conversation';
 import { contextMarkdown, type ContextBundle } from './context';
@@ -8,16 +9,9 @@ export interface AiModelInfo {
   vendor: string;
   maxInputTokens: number;
 }
-export interface AiChange {
-  fileId: string;
-  path: string;
-  content: string;
-}
-export interface AiProposal {
-  id: string;
-  summary: string;
-  changes: AiChange[];
-}
+export type { SourceEdit as AiChange, EditProposal as AiProposal } from './edits';
+import type { EditProposal as AiProposal } from './edits';
+import { parseEdits } from './edits';
 export interface AiReference {
   fileId: string;
   path: string;
@@ -32,6 +26,7 @@ export type AiUiMessage =
       requestId: string;
       question: string;
       mode: 'ask' | 'propose';
+      verificationId?: string;
     }
   | { type: 'aiHistory' | 'aiClearHistory'; rootId: string; regionKey: string }
   | {
@@ -41,11 +36,24 @@ export type AiUiMessage =
       rootId: string;
       regionKey: string;
     }
+  | { type: 'aiRunTest'; reportId: string; save: boolean }
+  | { type: 'aiStopTest' }
   | { type: 'aiCopy'; requestId: string; text: string }
-  | { type: 'aiDiff'; proposalId: string; fileId: string }
-  | { type: 'aiApply'; proposalId: string }
+  | { type: 'aiDiff'; proposalId: string; fileId: string; changeId?: string }
+  | { type: 'aiApply'; proposalId: string; changeIds?: string[] }
   | { type: 'aiOpenReference'; requestId: string; fileId: string; line: number };
 export type AiHostMessage =
+  | { type: 'aiVerification'; report: VerificationReport }
+  | { type: 'aiVerificationError'; reportId: string; message: string }
+  | {
+      type: 'aiProposalState';
+      rootId: string;
+      regionKey: string;
+      proposal: AiProposal;
+      state: 'ready' | 'applied' | 'expired';
+      appliedIds?: string[];
+      reviewed: string[];
+    }
   | {
       type: 'aiAction';
       rootId: string;
@@ -81,8 +89,13 @@ export type AiHostMessage =
       proposal?: AiProposal;
       references?: AiReference[];
     }
-  | { type: 'aiDiffOpened'; proposalId: string; fileId: string }
-  | { type: 'aiApplied'; proposalId: string; error?: string };
+  | { type: 'aiDiffOpened'; proposalId: string; fileId: string; changeIds: string[] }
+  | {
+      type: 'aiApplied';
+      proposalId: string;
+      error?: string;
+      conflict?: { fileId: string; changeId?: string };
+    };
 
 export function aiPrompt(bundle: ContextBundle, question: string, mode: 'ask' | 'propose') {
   return [
@@ -91,56 +104,15 @@ export function aiPrompt(bundle: ContextBundle, question: string, mode: 'ask' | 
     'Earlier conversation may refer to older source. Fresh context is authoritative. Only use the supplied context. Distinguish resolved import facts from inferences. State missing context.',
     mode === 'ask'
       ? 'Cite evidence using [[relative/path.ts:L12]] with one-based source lines. Do not invent files or lines.'
-      : 'Return ONLY JSON: {"summary":"description","changes":[{"path":"exact relative path from context","content":"complete replacement file content"}]}. At most 10 existing context files. Never create/delete/rename files. No markdown fences. Preserve unrelated code. No placeholders, ellipses or truncated replacements. If context is insufficient return an empty changes array and explain in summary.',
+      : 'Return ONLY JSON: {"summary":"description","changes":[{"path":"exact relative path from context","start":{"line":1,"character":0},"end":{"line":1,"character":5},"oldText":"exact original text in range","content":"replacement for ONLY that range","reason":"why"}]}. Source lines are prefixed N| for reference; the prefix is not part of source or oldText. Lines are one-based, columns zero-based UTF-16 after that prefix, end is exclusive. At most 40 non-overlapping edits in 10 existing context files. Never create/delete/rename files. Use small ranges. For insertion use equal start/end and empty oldText. No markdown fences. Preserve unrelated code. If context is insufficient return empty changes and explain in summary.',
     `User request:\n${question}`,
     'BEGIN UNTRUSTED CONTEXT',
-    contextMarkdown(bundle),
+    contextMarkdown(bundle, mode === 'propose'),
     'END UNTRUSTED CONTEXT',
   ].join('\n\n');
 }
 
-/** Fail closed: output paths map only to complete files in the reviewed context. */
-export function parseProposal(text: string, bundle: ContextBundle, id: string): AiProposal {
-  const value = JSON.parse(text.trim().replace(/^```(?:json)?\s*\n([\s\S]*?)\n```$/, '$1'));
-  if (
-    !value ||
-    typeof value.summary !== 'string' ||
-    value.summary.length > 8000 ||
-    !Array.isArray(value.changes) ||
-    value.changes.length > 10
-  ) {
-    throw new Error('Invalid proposal. Ask for a smaller change and try again.');
-  }
-  const seen = new Set<string>();
-  const changes: AiChange[] = value.changes.map((change: unknown) => {
-    if (
-      !change ||
-      typeof change !== 'object' ||
-      !('path' in change) ||
-      !('content' in change) ||
-      typeof change.path !== 'string' ||
-      typeof change.content !== 'string' ||
-      change.content.length > 100000
-    ) {
-      throw new Error('Invalid file replacement in proposal.');
-    }
-    const file = bundle.files.find((f) => f.path === change.path);
-    if (!file || file.truncated || file.excerpted || seen.has(file.id)) {
-      throw new Error(
-        'Proposal targets an unknown, duplicate or truncated context file. Narrow the context and try again.',
-      );
-    }
-    seen.add(file.id);
-    return { fileId: file.id, path: file.path, content: change.content };
-  });
-  return {
-    id,
-    summary: value.summary,
-    changes: changes.filter(
-      (c) => c.content !== bundle.files.find((f) => f.id === c.fileId)!.content,
-    ),
-  };
-}
+export const parseProposal = parseEdits;
 
 export function aiReferences(text: string, bundle: ContextBundle): AiReference[] {
   const result: AiReference[] = [];
@@ -179,6 +151,7 @@ export function readAiMessage(value: unknown): AiUiMessage | undefined {
     typeof (value as Record<string, unknown>)[key] === 'string' &&
     (value as Record<string, string>)[key].length <= limit;
   switch (value.type) {
+    case 'aiStopTest':
     case 'aiStatus':
     case 'aiChooseModel':
     case 'aiCancel':
@@ -205,12 +178,18 @@ export function readAiMessage(value: unknown): AiUiMessage | undefined {
         return value as AiUiMessage;
       }
       break;
+    case 'aiRunTest':
+      if (string('reportId', 200) && 'save' in value && typeof value.save === 'boolean') {
+        return value as AiUiMessage;
+      }
+      break;
     case 'aiRequest':
       if (
         string('rootId') &&
         string('contextId', 200) &&
         string('requestId', 200) &&
         string('question', 8000) &&
+        (!('verificationId' in value) || string('verificationId', 200)) &&
         'mode' in value &&
         (value.mode === 'ask' || value.mode === 'propose')
       ) {
@@ -218,12 +197,22 @@ export function readAiMessage(value: unknown): AiUiMessage | undefined {
       }
       break;
     case 'aiDiff':
-      if (string('proposalId', 200) && string('fileId')) {
+      if (
+        string('proposalId', 200) &&
+        string('fileId') &&
+        (!('changeId' in value) || string('changeId', 250))
+      ) {
         return value as AiUiMessage;
       }
       break;
     case 'aiApply':
-      if (string('proposalId', 200)) {
+      if (
+        string('proposalId', 200) &&
+        (!('changeIds' in value) ||
+          (Array.isArray(value.changeIds) &&
+            value.changeIds.length <= 40 &&
+            value.changeIds.every((id: unknown) => typeof id === 'string' && id.length <= 250)))
+      ) {
         return value as AiUiMessage;
       }
       break;

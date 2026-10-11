@@ -575,6 +575,7 @@ export class CodeMapPanel implements vscode.Disposable {
             return;
           }
           this.snapshot = snapshot;
+          this.ai.graphChanged();
           this.post({
             type: 'library',
             rootId: snapshot.root.id,
@@ -587,6 +588,9 @@ export class CodeMapPanel implements vscode.Disposable {
         },
         (state, autoUpdate, error) => {
           this.syncState = state;
+          if (state === 'out-of-date' || state === 'error') {
+            this.ai.graphChanged(true);
+          }
           this.post({ type: 'sync', state, autoUpdate });
           this.post({
             type: 'status',

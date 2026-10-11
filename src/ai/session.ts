@@ -1,3 +1,5 @@
+import { EditConflict, editContent, prepareEdits } from '../shared/edits';
+import { Verification } from './verification';
 import {
   actionCatalog,
   actionInstructions,
@@ -12,7 +14,6 @@ import { randomUUID, createHash } from 'node:crypto';
 import {
   aiPrompt,
   aiReferences,
-  assertContextUnchanged,
   parseProposal,
   type AiHostMessage,
   type AiModelInfo,
@@ -39,7 +40,13 @@ export interface AiSessionOptions {
 export class AiSession implements vscode.Disposable {
   private model?: vscode.LanguageModelChat;
   private active?: { id: string; cancellation: vscode.CancellationTokenSource };
-  private proposal?: { value: AiProposal; bundle: ContextBundle };
+  private proposal?: {
+    value: AiProposal;
+    bundle: ContextBundle;
+    state: 'ready' | 'applied' | 'expired';
+    appliedIds?: string[];
+  };
+  private verification: Verification;
   private conversations = new ConversationStore();
   private answers = new Map<
     string,
@@ -58,6 +65,7 @@ export class AiSession implements vscode.Disposable {
   private applying = false;
   private disposed = false;
   constructor(private options: AiSessionOptions) {
+    this.verification = new Verification(options.graph, options.post);
     this.provider = vscode.workspace.registerTextDocumentContentProvider(this.scheme, {
       provideTextDocumentContent: (uri) => this.previews.get(uri.toString()) ?? '',
     });
@@ -76,6 +84,8 @@ export class AiSession implements vscode.Disposable {
       maxInputTokens: this.model.maxInputTokens,
     };
     this.options.post({ type: 'aiModel', model, configuredId: this.configuredId(), error });
+    this.publishProposal();
+    this.verification.publish();
   }
   private select(selector?: vscode.LanguageModelChatSelector) {
     return (this.options.selectModels ?? vscode.lm.selectChatModels)(selector);
@@ -145,9 +155,40 @@ export class AiSession implements vscode.Disposable {
       });
     }
   }
+  graphChanged(outOfDate = false) {
+    if (outOfDate) {
+      this.verification.changed();
+    } else {
+      this.verification.publish();
+    }
+  }
+  private publishProposal() {
+    const saved = this.proposal;
+    if (saved) {
+      this.options.post({
+        type: 'aiProposalState',
+        rootId: saved.bundle.rootId,
+        regionKey:
+          saved.bundle.regionKey ??
+          contextRegionKey(
+            saved.bundle.rootId,
+            saved.bundle.files.map((f) => f.id),
+          ),
+        proposal: saved.value,
+        state: saved.state,
+        appliedIds: saved.appliedIds,
+        reviewed: [...this.reviewed],
+      });
+    }
+  }
   invalidate() {
     this.cancel();
+    if (this.proposal) {
+      this.proposal.state = 'expired';
+      this.publishProposal();
+    }
     this.proposal = undefined;
+    this.verification.reset();
 
     this.previews.clear();
     this.reviewed.clear();
@@ -288,11 +329,17 @@ export class AiSession implements vscode.Disposable {
       case 'aiRequest':
         await this.request(message);
         break;
+      case 'aiRunTest':
+        await this.verification.test(message.reportId, message.save);
+        break;
+      case 'aiStopTest':
+        this.verification.stop();
+        break;
       case 'aiDiff':
-        await this.diff(message.proposalId, message.fileId);
+        await this.diff(message.proposalId, message.fileId, message.changeId);
         break;
       case 'aiApply':
-        await this.apply(message.proposalId);
+        await this.apply(message.proposalId, message.changeIds);
         break;
       case 'aiOpenReference': {
         const refs = this.answers.get(message.requestId);
@@ -421,7 +468,14 @@ export class AiSession implements vscode.Disposable {
     }
   }
   private async request(message: Extract<AiUiMessage, { type: 'aiRequest' }>) {
-    this.invalidate();
+    this.cancel();
+    if (this.proposal) {
+      this.proposal.state = 'expired';
+      this.publishProposal();
+    }
+    this.proposal = undefined;
+    this.previews.clear();
+    this.reviewed.clear();
     const cancellation = new vscode.CancellationTokenSource();
     this.active = { id: message.requestId, cancellation };
     const valid = () =>
@@ -520,7 +574,10 @@ export class AiSession implements vscode.Disposable {
           : undefined;
       const prompt = vscode.LanguageModelChatMessage.User(
         aiPrompt(bundle, message.question, message.mode) +
-          (catalog ? '\n\n' + actionInstructions(catalog) : ''),
+          (catalog ? '\n\n' + actionInstructions(catalog) : '') +
+          (message.mode === 'ask' && message.verificationId
+            ? '\n\n' + this.verification.context(message.verificationId, message.rootId)
+            : ''),
       );
       const messages = history.flatMap((turn) => [
         vscode.LanguageModelChatMessage.User(turn.question),
@@ -587,7 +644,8 @@ export class AiSession implements vscode.Disposable {
       const proposal =
         message.mode === 'propose' ? parseProposal(text, bundle, randomUUID()) : undefined;
       if (proposal) {
-        this.proposal = { value: proposal, bundle };
+        this.proposal = { value: proposal, bundle, state: 'ready' };
+        this.publishProposal();
       }
       const parsed =
         catalog && graph
@@ -627,20 +685,29 @@ export class AiSession implements vscode.Disposable {
       cancellation.dispose();
     }
   }
-  async diff(proposalId: string, fileId: string) {
+  async diff(proposalId: string, fileId: string, changeId?: string) {
     const saved = this.proposal;
     const change =
       saved?.value.id === proposalId && saved.value.changes.find((c) => c.fileId === fileId);
-    if (!saved || !change) {
+    if (!saved || !change || saved.state !== 'ready') {
+      return;
+    }
+    const changes = saved.value.changes.filter(
+      (c) => c.fileId === fileId && (!changeId || c.id === changeId),
+    );
+    if (!changes.length) {
       return;
     }
     const original = saved.bundle.files.find((f) => f.id === fileId)!;
     const uri = (side: string) =>
-      vscode.Uri.from({ scheme: this.scheme, path: `/${proposalId}/${side}/${change.path}` });
+      vscode.Uri.from({
+        scheme: this.scheme,
+        path: `/${proposalId}/${changeId ?? 'all'}/${side}/${change.path}`,
+      });
     const before = uri('before'),
       after = uri('after');
     this.previews.set(before.toString(), original.content);
-    this.previews.set(after.toString(), change.content);
+    this.previews.set(after.toString(), editContent(original.content, changes));
     await vscode.commands.executeCommand(
       'vscode.diff',
       before,
@@ -649,11 +716,17 @@ export class AiSession implements vscode.Disposable {
       { viewColumn: vscode.ViewColumn.Beside, preview: true },
     );
     if (this.proposal === saved && !this.disposed) {
-      this.reviewed.add(fileId);
-      this.options.post({ type: 'aiDiffOpened', proposalId, fileId });
+      changes.forEach((c) => this.reviewed.add(c.id));
+      this.options.post({
+        type: 'aiDiffOpened',
+        proposalId,
+        fileId,
+        changeIds: changes.map((c) => c.id),
+      });
+      this.publishProposal();
     }
   }
-  async apply(proposalId: string) {
+  async apply(proposalId: string, changeIds?: string[]) {
     if (this.applying) {
       return;
     }
@@ -661,11 +734,20 @@ export class AiSession implements vscode.Disposable {
     try {
       const saved = this.proposal;
       const graph = this.options.graph();
-      if (!saved || saved.value.id !== proposalId || !saved.value.changes.length) {
+      if (
+        !saved ||
+        saved.value.id !== proposalId ||
+        !saved.value.changes.length ||
+        saved.state !== 'ready'
+      ) {
         throw new Error('Proposal no longer available. Generate a new proposal.');
       }
-      if (saved.value.changes.some((c) => !this.reviewed.has(c.fileId))) {
-        throw new Error('Review every proposed file diff before applying.');
+      if (this.verification.isRunning) {
+        throw new Error('Stop the running project test before applying more changes.');
+      }
+      const ids = changeIds ?? saved.value.changes.map((c) => c.id);
+      if (ids.some((id) => !this.reviewed.has(id))) {
+        throw new Error('Review every accepted change diff before applying.');
       }
       if (
         !vscode.workspace.isTrusted ||
@@ -678,8 +760,10 @@ export class AiSession implements vscode.Disposable {
         saved.bundle.files.map((f) => vscode.workspace.openTextDocument(vscode.Uri.parse(f.id))),
       );
       // No awaits between comparing current buffers and submitting the edit.
-      assertContextUnchanged(
+      const changes = prepareEdits(
+        saved.value,
         saved.bundle,
+        ids,
         new Map(documents.map((d) => [d.uri.toString(), d.getText()])),
       );
       if (
@@ -690,22 +774,46 @@ export class AiSession implements vscode.Disposable {
         throw new Error('Proposal expired.');
       }
       const edit = new vscode.WorkspaceEdit();
-      for (const change of saved.value.changes) {
+      const diagnostics = this.verification.diagnostics(graph);
+      for (const change of changes) {
         const document = documents.find((d) => d.uri.toString() === change.fileId)!;
         edit.replace(
           document.uri,
-          new vscode.Range(document.positionAt(0), document.positionAt(document.getText().length)),
+          new vscode.Range(
+            document.positionAt(change.startOffset),
+            document.positionAt(change.endOffset),
+          ),
           change.content,
         );
       }
       if (!(await vscode.workspace.applyEdit(edit, { isRefactoring: true }))) {
         throw new Error('VS Code could not apply the edit.');
       }
-      this.proposal = undefined;
+      saved.state = 'applied';
+      saved.appliedIds = ids;
+      this.publishProposal();
       this.options.post({ type: 'aiApplied', proposalId });
-      await this.options.afterApply();
+      // Apply succeeded even if the following graph refresh fails.
+      try {
+        await this.verification.observe(
+          graph!,
+          diagnostics,
+          proposalId,
+          [...new Set(changes.map((c) => c.fileId))],
+          this.options.afterApply,
+        );
+      } catch (error) {
+        this.options.log?.(`Post-Apply verification failed: ${String(error)}`);
+      }
     } catch (error) {
-      this.options.post({ type: 'aiApplied', proposalId, error: String(error) });
+      this.options.post({
+        type: 'aiApplied',
+        proposalId,
+        error: String(error),
+        ...(error instanceof EditConflict
+          ? { conflict: { fileId: error.fileId, changeId: error.changeId } }
+          : {}),
+      });
     } finally {
       this.applying = false;
     }
@@ -715,5 +823,6 @@ export class AiSession implements vscode.Disposable {
     this.invalidate();
     this.answers.clear();
     this.provider.dispose();
+    this.verification.dispose();
   }
 }

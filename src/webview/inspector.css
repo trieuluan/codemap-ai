@@ -1185,3 +1185,105 @@ button.ai-inline-citation {
   font-size: 12px;
   line-height: 1.5;
 }
+
+.ai-edit-card,
+.ai-verification {
+  margin-top: 12px;
+  padding: 14px;
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: 10px;
+  background: var(--vscode-editor-background);
+}
+.ai-edit-card.accepted {
+  border-left: 3px solid var(--vscode-testing-iconPassed, #73c991);
+}
+.ai-edit-card.rejected {
+  opacity: 0.65;
+}
+.ai-edit-choice,
+.ai-verification-share {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+.ai-edit-choice span {
+  min-width: 0;
+}
+.ai-edit-choice strong {
+  overflow-wrap: anywhere;
+}
+.ai-edit-choice small,
+.ai-verification > small {
+  display: block;
+  margin-top: 4px;
+  color: var(--vscode-descriptionForeground);
+}
+.ai-edit-card p,
+.ai-diagnostic p {
+  margin: 8px 0;
+  overflow-wrap: anywhere;
+}
+.ai-edit-card pre,
+.ai-test-output {
+  max-height: 240px;
+  overflow: auto;
+  padding: 10px;
+  background: var(--vscode-textCodeBlock-background);
+  font-family: var(--vscode-editor-font-family);
+  font-size: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.ai-edit-card details,
+.ai-verification details {
+  margin: 12px 0;
+}
+.ai-edit-card summary,
+.ai-verification summary {
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+.ai-verification-stats {
+  display: flex;
+  gap: 16px;
+  margin: 14px 0;
+}
+.ai-verification-stats span {
+  color: var(--vscode-descriptionForeground);
+}
+.ai-verification-stats strong {
+  color: var(--vscode-foreground);
+}
+.ai-test-section {
+  border-top: 1px solid var(--vscode-panel-border);
+  margin-top: 14px;
+  padding-top: 14px;
+}
+.ai-test-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.ai-verification-share {
+  margin-top: 14px;
+  font-size: 12px;
+}
+.ai-diagnostic {
+  border-bottom: 1px solid var(--vscode-panel-border);
+  padding: 8px 0;
+}
+
+.ai-edit-choice input[type='checkbox'],
+.ai-verification-share input[type='checkbox'] {
+  width: auto;
+  flex: 0 0 auto;
+  padding: 0;
+  margin: 3px 0 0;
+}
+.ai-edit-choice span {
+  flex: 1;
+}
+.ai-verification {
+  font-size: 12px;
+  line-height: 1.6;
+}

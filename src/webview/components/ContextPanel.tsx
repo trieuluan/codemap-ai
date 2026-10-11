@@ -1,7 +1,7 @@
 import { actionCatalog, type AiGraphAction } from '../../shared/ai-actions';
 import { useContextPreview } from '../hooks/useContextPreview';
 import { AiAssistant } from './AiAssistant';
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import type { GraphSnapshot, SyncState } from '../../shared/model';
 import { contextCandidates, contextLimits } from '../../shared/context';
 import { PanelHeading, PanelSection } from './InspectorParts';
@@ -17,7 +17,9 @@ export function ContextPanel({
   selectedSymbol,
   onAdd,
   onGraphAction,
+  intent,
 }: {
+  intent?: { mode: 'ask' | 'propose'; id: string };
   snapshot: GraphSnapshot;
   selected: string[];
   onToggle: (id: string) => void;
@@ -28,6 +30,8 @@ export function ContextPanel({
   onAdd: (ids: string[]) => void;
   onGraphAction: (action: AiGraphAction) => void;
 }) {
+  const [width, setWidth] = useState(420);
+  const resize = useRef<{ x: number; width: number } | undefined>(undefined);
   const [added, setAdded] = useState<string[]>([]);
   const [focused, setFocused] = useState(true);
   const [symbolChoice, setSymbolChoice] = useState<string>();
@@ -71,51 +75,96 @@ export function ContextPanel({
         file.path.toLowerCase().includes(query.toLowerCase()) && !selected.includes(file.id),
     )
     .slice(0, 20);
-  return (
-    <aside className="inspector" aria-label="Context builder">
-      <PanelHeading
-        eyebrow="Working region"
-        title="Build context"
-        subtitle="Choose a working region, then ask AI. Preview is optional."
-        action={
-          <button className="icon-button" aria-label="Close context" onClick={onClose}>
-            ×
-          </button>
-        }
-      />
-      <div className="inspector-body">
+  const contextContent = (
+    <div className="assistant-context-content">
+      <div className="assistant-section-intro">
+        <strong>Source for this conversation</strong>
         <p className="helper-text">
-          Shift-click files or folders on the canvas to add/remove a region. Search here to add
-          hidden files.
+          Choose which files the assistant can read. Nothing is sent until you submit.
         </p>
-        <input
-          aria-label="Add context file"
-          placeholder="Find a file to add…"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-        />
-        {query && (
-          <div className="context-results">
-            {matches.map((file) => (
-              <button
-                className="file-row"
-                key={file.id}
-                onClick={() => {
+      </div>
+
+      <p className="helper-text">
+        Shift-click files or folders on the canvas to add/remove a region. Search here to add hidden
+        files.
+      </p>
+      <input
+        aria-label="Add context file"
+        placeholder="Find a file to add…"
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+      />
+      {query && (
+        <div className="context-results">
+          {matches.map((file) => (
+            <button
+              className="file-row"
+              key={file.id}
+              onClick={() => {
+                onToggle(file.id);
+                setExcluded((ids) => ids.filter((id) => id !== file.id));
+                setQuery('');
+              }}
+            >
+              <span className="file-row-text">
+                <strong>{file.name}</strong>
+                <small>{file.path}</small>
+              </span>
+              <span>+</span>
+            </button>
+          ))}
+          {!matches.length && <p className="helper-text">No other matching files.</p>}
+        </div>
+      )}
+      <div className="section-toolbar">
+        <span className="eyebrow">
+          {fileIds.length} included · {selected.length} selected
+        </span>
+        <button
+          className="quiet-button"
+          onClick={() => {
+            onClear();
+            setExcluded([]);
+          }}
+        >
+          Clear
+        </button>
+      </div>
+      <div className="context-file-list">
+        {candidates.map((file) => (
+          <div className="context-file-row" key={file.id}>
+            <input
+              type="checkbox"
+              aria-label={`Include ${file.path}`}
+              checked={!excluded.includes(file.id)}
+              onChange={(e) =>
+                setExcluded((ids) =>
+                  e.target.checked ? ids.filter((id) => id !== file.id) : [...ids, file.id],
+                )
+              }
+            />
+            <span title={file.path}>{file.path}</span>
+            <small>{selected.includes(file.id) ? 'selected' : 'related'}</small>
+            <button
+              className="icon-button"
+              aria-label={`Remove ${file.path}`}
+              onClick={() => {
+                setExcluded((ids) => [...ids, file.id]);
+                if (selected.includes(file.id)) {
                   onToggle(file.id);
-                  setExcluded((ids) => ids.filter((id) => id !== file.id));
-                  setQuery('');
-                }}
-              >
-                <span className="file-row-text">
-                  <strong>{file.name}</strong>
-                  <small>{file.path}</small>
-                </span>
-                <span>+</span>
-              </button>
-            ))}
-            {!matches.length && <p className="helper-text">No other matching files.</p>}
+                }
+              }}
+            >
+              ×
+            </button>
           </div>
-        )}
+        ))}
+      </div>
+      {!candidates.length && (
+        <p className="helper-text">Select files on the graph or add them above.</p>
+      )}
+      <details className="assistant-advanced">
+        <summary>Source options & preview</summary>{' '}
         <div className="context-options">
           <label>
             <input
@@ -168,53 +217,6 @@ export function ContextPanel({
             files are included only when selected above.
           </p>
         </div>
-        <div className="section-toolbar">
-          <span className="eyebrow">
-            {fileIds.length} included · {selected.length} selected
-          </span>
-          <button
-            className="quiet-button"
-            onClick={() => {
-              onClear();
-              setExcluded([]);
-            }}
-          >
-            Clear
-          </button>
-        </div>
-        <div className="context-file-list">
-          {candidates.map((file) => (
-            <label className="context-file-row" key={file.id}>
-              <input
-                type="checkbox"
-                aria-label={`Include ${file.path}`}
-                checked={!excluded.includes(file.id)}
-                onChange={(e) =>
-                  setExcluded((ids) =>
-                    e.target.checked ? ids.filter((id) => id !== file.id) : [...ids, file.id],
-                  )
-                }
-              />
-              <span title={file.path}>{file.path}</span>
-              <small>{selected.includes(file.id) ? 'selected' : 'related'}</small>
-              <button
-                className="icon-button"
-                aria-label={`Remove ${file.path}`}
-                onClick={() => {
-                  setExcluded((ids) => [...ids, file.id]);
-                  if (selected.includes(file.id)) {
-                    onToggle(file.id);
-                  }
-                }}
-              >
-                ×
-              </button>
-            </label>
-          ))}
-        </div>
-        {!candidates.length && (
-          <p className="helper-text">Select files on the graph or add them above.</p>
-        )}
         <p className="helper-text">
           Preview budget: {contextLimits.files} files, {contextLimits.perFile.toLocaleString()}{' '}
           characters/file, {contextLimits.total.toLocaleString()} total. Truncation is shown
@@ -261,35 +263,6 @@ export function ContextPanel({
           Ask also sends a bounded graph index of file paths, declaration names and import pairs to
           suggest what to explore. Source from unselected files is never read for that index.
         </p>
-        <AiAssistant
-          onAction={(action) => {
-            if (action.kind !== 'addContext') {
-              onGraphAction(action);
-              return;
-            }
-            const ids = action.targets.map((t) => t.fileId);
-            onAdd(ids);
-            setExcluded((current) => current.filter((id) => !ids.includes(id)));
-            const target = action.targets.find((t) => t.symbol);
-            if (target?.symbol) {
-              const symbol = snapshot.nodes
-                .find((n) => n.id === target.fileId)
-                ?.declarations?.find((s) => s.id === target.symbol!.id);
-              if (symbol) {
-                setSymbolChoice(JSON.stringify([target.fileId, symbol.kind, symbol.name]));
-                setFocused(true);
-              }
-            }
-            setAdded(action.targets.map((t) => t.path));
-          }}
-          prepareContext={prepare}
-          regionKey={regionKey}
-          conversationKey={conversationKey}
-          rootId={snapshot.root.id}
-          revision={snapshot.revision}
-          fileCount={fileIds.length}
-          sync={sync}
-        />
         {bundle && (
           <div className="context-preview">
             <h3>Preview · {bundle.files.length} files</h3>
@@ -377,10 +350,108 @@ export function ContextPanel({
             ))}
           </div>
         )}
-      </div>
-      <div className="inspector-footnote">
-        Preview stays local · AI sends only on request · edits require Apply
-      </div>
+      </details>
+    </div>
+  );
+  return (
+    <aside className="inspector assistant-panel" aria-label="CodeMap Assistant" style={{ width }}>
+      <div
+        className="assistant-resize"
+        role="separator"
+        aria-label="Resize assistant"
+        aria-orientation="vertical"
+        aria-valuemin={320}
+        aria-valuemax={Math.max(320, Math.min(760, window.innerWidth - 180))}
+        aria-valuenow={width}
+        tabIndex={0}
+        onPointerDown={(event) => {
+          event.preventDefault();
+          event.currentTarget.setPointerCapture(event.pointerId);
+          resize.current = { x: event.clientX, width };
+        }}
+        onPointerMove={(event) => {
+          if (resize.current) {
+            setWidth(
+              Math.max(
+                320,
+                Math.min(
+                  760,
+                  window.innerWidth - 180,
+                  resize.current.width + resize.current.x - event.clientX,
+                ),
+              ),
+            );
+          }
+        }}
+        onPointerUp={() => {
+          resize.current = undefined;
+        }}
+        onPointerCancel={() => {
+          resize.current = undefined;
+        }}
+        onKeyDown={(event) => {
+          if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+            event.preventDefault();
+            setWidth((value) =>
+              Math.max(
+                320,
+                Math.min(
+                  760,
+                  window.innerWidth - 180,
+                  value + (event.key === 'ArrowLeft' ? 24 : -24),
+                ),
+              ),
+            );
+          }
+        }}
+      />
+      <PanelHeading
+        eyebrow="CodeMap"
+        title="Assistant"
+        action={
+          <button className="icon-button" aria-label="Close assistant" onClick={onClose}>
+            ×
+          </button>
+        }
+      />
+      <AiAssistant
+        intent={intent}
+        contextBundle={bundle}
+        contextSummary={
+          fileIds.length
+            ? `${candidates.find((file) => file.id === fileIds[0])?.name ?? 'Selected source'}${fileIds.length > 1 ? ` + ${fileIds.length - 1} files` : ''}`
+            : 'No files selected'
+        }
+        contextWarning={bundle?.warnings.join(' · ') ?? ''}
+        contextContent={contextContent}
+        onAction={(action) => {
+          if (action.kind !== 'addContext') {
+            onGraphAction(action);
+            return;
+          }
+          const ids = action.targets.map((t) => t.fileId);
+          onAdd(ids);
+          setExcluded((current) => current.filter((id) => !ids.includes(id)));
+          const target = action.targets.find((t) => t.symbol);
+          if (target?.symbol) {
+            const symbol = snapshot.nodes
+              .find((n) => n.id === target.fileId)
+              ?.declarations?.find((s) => s.id === target.symbol!.id);
+            if (symbol) {
+              setSymbolChoice(JSON.stringify([target.fileId, symbol.kind, symbol.name]));
+              setFocused(true);
+            }
+          }
+          setAdded(action.targets.map((t) => t.path));
+        }}
+        prepareContext={prepare}
+        regionKey={regionKey}
+        conversationKey={conversationKey}
+        rootId={snapshot.root.id}
+        revision={snapshot.revision}
+        fileCount={fileIds.length}
+        sync={sync}
+      />
     </aside>
   );
 }

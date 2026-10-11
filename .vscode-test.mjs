@@ -21,7 +21,7 @@ process.on('exit', () => rmSync(workspace, { recursive: true, force: true }));
 export default defineConfig([
   {
     label: 'workspace',
-    files: ['out/test/extension.test.js', 'out/test/ai.test.js'],
+    files: ['out/test/extension.test.js', 'out/test/ai.test.js', 'out/test/verification.test.js'],
     launchArgs: [workspace, '--disable-extensions', '--skip-welcome'],
   },
   {

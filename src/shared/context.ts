@@ -176,7 +176,7 @@ function importSummary(edge: ContextFile['imports'][number]) {
   return `${edge.path} [${locations.join('; ')}]`;
 }
 /** Preview and copy use the same local bundle. No network or project execution. */
-export function contextMarkdown(bundle: ContextBundle) {
+export function contextMarkdown(bundle: ContextBundle, numberLines = false) {
   const fence = (content: string) =>
     '`'.repeat(Math.max(3, ...[...content.matchAll(/`+/g)].map((m) => m[0].length + 1)));
   return [
@@ -203,7 +203,14 @@ export function contextMarkdown(bundle: ContextBundle) {
                   `Source L${excerpt.startLine}–L${excerpt.endLine}:\n${delimiter}${file.language}\n${excerpt.content}\n${delimiter}`,
               )
               .join('\n\n')
-          : `${delimiter}${file.language}\n${file.content}\n${delimiter}`,
+          : `${delimiter}${file.language}\n${
+              numberLines
+                ? file.content
+                    .split('\n')
+                    .map((line, index) => `${index + 1}|${line}`)
+                    .join('\n')
+                : file.content
+            }\n${delimiter}`,
       ]
         .filter(Boolean)
         .join('\n\n');

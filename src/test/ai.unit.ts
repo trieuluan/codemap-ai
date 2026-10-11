@@ -34,13 +34,22 @@ const bundle: ContextBundle = {
   ],
 };
 const proposal = (changes: unknown[]) => JSON.stringify({ summary: 'Change value', changes });
-test('AI prompt delimits untrusted source and uses complete replacements only for proposals', () => {
+test('AI prompt delimits untrusted source and requests small range edits for proposals', () => {
   assert.ok(aiPrompt(bundle, 'Giải thích', 'ask').includes('[[relative/path.ts:L12]]'));
   assert.ok(aiPrompt(bundle, 'Change', 'propose').includes('Never create/delete/rename'));
   assert.ok(aiPrompt(bundle, 'Change', 'propose').includes('BEGIN UNTRUSTED CONTEXT'));
+  assert.ok(aiPrompt(bundle, 'Change', 'propose').includes('1|const a = 1;'));
+  assert.ok(!aiPrompt(bundle, 'Explain', 'ask').includes('1|const a = 1;'));
 });
 test('proposal parser rejects unknown paths, duplicates, partial files and malformed output', () => {
-  const change = { path: 'src/a.ts', content: 'const a = 2;' };
+  const change = {
+    path: 'src/a.ts',
+    start: { line: 1, character: 10 },
+    end: { line: 1, character: 11 },
+    oldText: '1',
+    content: '2',
+    reason: 'Update value',
+  };
   assert.equal(parseProposal(proposal([change]), bundle, 'p').changes[0].fileId, 'file:///a.ts');
   assert.throws(() => parseProposal(proposal([{ ...change, path: '../secret.ts' }]), bundle, 'p'));
   assert.throws(() => parseProposal(proposal([change, change]), bundle, 'p'));
@@ -54,11 +63,7 @@ test('proposal parser rejects unknown paths, duplicates, partial files and malfo
   assert.throws(() => parseProposal('not json', bundle, 'p'));
   assert.throws(() => parseProposal(proposal([{ path: 'src/a.ts', content: 1 }]), bundle, 'p'));
   assert.throws(() => parseProposal(proposal(Array(11).fill(change)), bundle, 'p'));
-  assert.deepEqual(
-    parseProposal(proposal([{ path: 'src/a.ts', content: bundle.files[0].content }]), bundle, 'p')
-      .changes,
-    [],
-  );
+  assert.deepEqual(parseProposal(proposal([{ ...change, content: '1' }]), bundle, 'p').changes, []);
 });
 test('citations accept only reviewed file paths and valid one-based source lines', () => {
   assert.deepEqual(
